@@ -13,8 +13,8 @@
 </p>
 
 <p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
-  <a href="README.en.md"><img src="https://img.shields.io/badge/english-document-white.svg" alt="EN doc"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
+  <a href="README.ja.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
 </p>
 
 This Agent Skill uses tree-sitter AST parsing and PageRank to build a ranked view of a repository, then uses that output to decide which files to inspect next. It is useful for first-pass exploration, broad impact analysis, narrowing candidates before refactoring, and preparing compact cross-file context for agent handoff.

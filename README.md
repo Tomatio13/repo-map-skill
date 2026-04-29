@@ -1,8 +1,8 @@
 <h1 align="center">repo-map</h1>
 
 <p align="center">
-  tree-sitter AST解析と PageRank を使って repo map を生成し、
-  次に読むファイルを決める Agent Skill
+  An Agent Skill that generates a repo map with tree-sitter AST parsing and
+  PageRank, then uses that map to decide what files to inspect next
 </p>
 
 <p align="center">
@@ -13,46 +13,46 @@
 </p>
 
 <p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
-  <a href="README.en.md"><img src="https://img.shields.io/badge/english-document-white.svg" alt="EN doc"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
+  <a href="README.ja.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
 </p>
 
-Agent Skills 仕様準拠のスキルです。tree-sitter AST解析と PageRank を用いてリポジトリ全体をランキング付きで俯瞰し、その結果を使って次に読むファイルを決めます。初回探索、広い影響範囲の調査、リファクタ前の候補絞り込み、agent handoff 用の圧縮コンテキスト作成に向いています。
+This Agent Skill uses tree-sitter AST parsing and PageRank to build a ranked view of a repository, then uses that output to decide which files to inspect next. It is useful for first-pass exploration, broad impact analysis, narrowing candidates before refactoring, and preparing compact cross-file context for agent handoff.
 
 Based on [Aider](https://github.com/Aider-AI/aider)'s repomap feature.
 
-## ✨ 特徴
+## ✨ Features
 
-- **30+言語対応** — Python, JavaScript, TypeScript, Java, Go, Rust, C/C++, Ruby, PHP, Kotlin, Swift 等
-- **PageRank ランキング** — ファイル間の依存関係グラフから重要度を自動判定
-- **トークン予算制御** — 指定トークン数内に収まるよう二分探索で最適化
-- **キャッシュ機能** — SQLiteベースの永続キャッシュで2回目以降は高速
-- **次の読む対象を決める** — 上位ファイルから読む順番を決めて探索コストを下げる
+- **30+ language support** — Python, JavaScript, TypeScript, Java, Go, Rust, C/C++, Ruby, PHP, Kotlin, Swift, and more
+- **PageRank ranking** — Automatically scores file importance from the dependency graph
+- **Token budget control** — Uses binary search to fit output within a target token budget
+- **Persistent caching** — SQLite-backed cache speeds up repeated runs
+- **Choose what to read next** — Helps reduce search cost by ranking the next files to inspect
 
-## 🧭 どう使うか
+## 🧭 How To Use It
 
-1. repo map を生成する
-2. 上位ファイルを見る
-3. 今の依頼に関係するファイルを 3〜5 個に絞る
-4. そのファイルだけ深掘りする
+1. Generate a repo map
+2. Review the top-ranked files
+3. Narrow the relevant files for the current request down to 3-5
+4. Deep-read only those files
 
-生成した repo map は、概要表示で終わらせず、次に読む 3〜5 ファイルを決めるために使います。
+Do not stop at the map itself. Use the ranked output to decide the next 3-5 files to inspect.
 
-## 🔁 二手目以降
+## 🔁 After The First Map
 
-repo map は検索の代わりではなく、検索前の圧縮ガイドとして使います。
+Use the repo map as a compressed guide before direct search, not as a replacement for search.
 
-1. repo map から上位 3〜5 ファイルを選ぶ
-2. そのファイルだけ `Read` や `rg` で深掘りする
-3. 足りなければ `--mentioned-idents` や `--other-files` を付けて再生成する
+1. Pick the top 3-5 files from the map
+2. Deep-read only those files with `Read` or `rg`
+3. If needed, regenerate the map with `--mentioned-idents` or `--other-files`
 
-`こういう処理どこ？` のような質問では、次の使い分けが実務的です。
+For questions like "where is this logic?", this split works well:
 
-- 全体像が曖昧: まず map を作る
-- 処理名がぼんやり分かる: `--mentioned-idents` で寄せる
-- 関数名やファイル名が既知: map を飛ばして `rg` / `Read` に直行する
+- The overall area is unclear: start with a repo map
+- You vaguely know the processing name: bias the map with `--mentioned-idents`
+- You already know the function or file name: skip the map and go straight to `rg` / `Read`
 
-例:
+Example:
 
 ```bash
 python scripts/generate_repomap.py \
@@ -63,35 +63,35 @@ python scripts/generate_repomap.py \
   --show-ranks
 ```
 
-この出力を見た後は、上位ファイルだけを対象に `Read` や `rg "auth|login|token"` を使って絞り込みます。
+After that, use `Read` or `rg "auth|login|token"` only on the top-ranked files.
 
-## ✅ 使うべき時
+## ✅ Good Fit
 
-- 次にどのファイルを読めばよいか決めたい時
-- 実装、レビュー、リファクタ前に候補ファイルを絞りたい時
-- repo の初回探索で読む順番を決めたい時
-- 別 agent に渡す前に cross-file の圧縮コンテキストを作りたい時
+- You want to decide what files to inspect next
+- You want to narrow candidate files before implementation, review, or refactoring
+- You want a first reading order for a repository
+- You want compact cross-file context before handing work to another agent
 
-## 🚫 使わない方がいい時
+## 🚫 Not A Good Fit
 
-- 次に読むファイルやシンボルがすでに決まっている
-- `rg` や Language Server Protocol で十分に絞れている
-- 小さな repo で一覧を見るだけで足りる
+- You already know the next file or symbol to inspect
+- `rg` or Language Server Protocol output already narrowed the target enough
+- The repository is small enough that a direct file listing is sufficient
 
-## 🚀 クイックスタート
+## 🚀 Quick Start
 
 ```bash
-# 依存インストール（仮想環境推奨）
+# Install dependencies (virtual environment recommended)
 python -m venv .venv && source .venv/bin/activate
 pip install -r scripts/requirements.txt
 
-# リポジトリマップ生成
+# Generate a repo map
 python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 1024
 ```
 
-生成後は、上位に出たファイルから次に読む対象を決めてください。
+After generation, use the top-ranked files to decide what to inspect next.
 
-## 📄 出力例
+## 📄 Example Output
 
 ```
 src/services/user_service.py [lines 12-20]:
@@ -109,104 +109,104 @@ src/views/api.py [lines 33-35]:
 34│    user = User.objects.get(id=user_id)
 ```
 
-ファイルは PageRank スコア順に上から並び、各ファイルの主要なクラス・関数・メソッドが表示されます。
-見出しの `lines` は 1-based の注目行範囲です。シンボル本体全体の厳密な span ではありません。本文も行番号付きなので、そのままピンポイントで `Read` に渡せます。
+Files are ordered from top to bottom by PageRank score, with the main classes, functions, and methods shown for each file.
+The header `lines` use 1-based focus-line ranges. They are not guaranteed to be the full symbol span. The body also includes line numbers so you can hand exact locations to a later `Read`.
 
-この出力を見た後は、次をまとめると実務で使いやすいです。
+After reviewing the output, it is usually helpful to summarize:
 
-- 最重要ファイル
-- 次に読む 3 ファイル
-- それぞれが依頼にどう関係するか
+- The most important file
+- The next 3 files to read
+- How each one relates to the current request
 
-## ⚙️ CLI オプション
+## ⚙️ CLI Options
 
-### 必須
+### Required
 
-- `--repo-path`: リポジトリのルートパス
+- `--repo-path`: Repository root path
 
-### 範囲の絞り込み
+### Scope Control
 
-- `--chat-files`: すでに文脈にあるので除外したいファイル
-- `--other-files`: 対象ファイルを明示したい時に使う。省略時は自動探索
-- `--exclude-glob`: 自動探索から除外する glob。`**/*.min.js,dist/*` のように指定
+- `--chat-files`: Files to exclude because they are already in context
+- `--other-files`: Explicit file set to include; auto-discovers files if omitted
+- `--exclude-glob`: Glob patterns to exclude from auto-discovery, such as `**/*.min.js,dist/*`
 
-### ランキング補助
+### Ranking Hints
 
-- `--mentioned-fnames`: ランキングをブーストするファイル名。絶対パスまたは `--repo-path` 基準の相対パス
-- `--mentioned-idents`: ランキングをブーストする識別子
+- `--mentioned-fnames`: Filenames to boost. Accepts absolute paths or paths relative to `--repo-path`
+- `--mentioned-idents`: Identifiers to boost in ranking
 
-### 予算とデバッグ
+### Budget And Debug
 
-- `--map-tokens`: 出力の最大トークン数。デフォルトは `1024`
-- `--no-cache`: キャッシュ無効。常に再計算
-- `--verbose`: 進捗・デバッグ情報を stderr に出力
+- `--map-tokens`: Maximum output token budget. Default is `1024`
+- `--no-cache`: Disable cache and always recompute
+- `--verbose`: Print progress and debug information to stderr
 
-`--chat-files` と `--other-files` も、絶対パスまたは `--repo-path` 基準の相対パスを受け付けます。
-`--exclude-glob` は repo-relative path に対して評価されます。
-`--show-ranks` を付けると、各ファイル見出しに表示順と対応した ranking score を表示します。
+`--chat-files` and `--other-files` also accept absolute paths or paths relative to `--repo-path`.
+`--exclude-glob` is evaluated against repo-relative paths.
+Add `--show-ranks` to include each file's ranking score in the header, aligned with the display order.
 
-## 🧠 仕組み
+## 🧠 How It Works
 
-1. **Parse** — tree-sitter でソースコードをAST解析し、シンボルの定義（クラス・関数）と参照（呼び出し）を抽出
-2. **Rank** — ファイル間の依存関係から有向グラフを構築し、PageRank で重要度をランキング
-3. **Render** — トークン予算内に収まるよう二分探索で最適なタグ数を決定し、コード行付きツリーを出力
+1. **Parse** — tree-sitter parses the source code AST and extracts definitions and references
+2. **Rank** — a directed graph is built across files and scored with PageRank
+3. **Render** — binary search fits the best output into the token budget
 
-minified asset や build artifact が強く出る repo では、`--exclude-glob "**/*.min.js,dist/*"` を付けると精度が上がります。
+If minified assets or build artifacts dominate the map, add `--exclude-glob "**/*.min.js,dist/*"` to improve the ranking.
 
-ランキングの重み付け要素:
+Ranking multipliers:
 
-| 条件 | 乗数 |
+| Condition | Multiplier |
 |------|------|
-| ユーザーが言及した識別子 | 10x |
-| 意味のある名前（snake_case等、8文字以上） | 10x |
-| プライベート（`_`始まり） | 0.1x |
-| 5ファイル以上で定義される汎用名 | 0.1x |
-| チャット内ファイルからの参照 | 50x |
+| Identifier mentioned by the user | 10x |
+| Meaningful name (snake_case etc., 8+ chars) | 10x |
+| Private (`_` prefix) | 0.1x |
+| Generic name defined in 5+ files | 0.1x |
+| Reference from a chat file | 50x |
 
-## 🔎 自動探索
+## 🔎 Auto-discovery
 
-- 通常の hidden directory は除外されます
-- ただし `.github` は例外で、`.github/workflows/*.yml` は重要ファイルとして map に残ります
-- 画像、アーカイブ、バイナリ、DB などの一般的な非ソース拡張子は除外されます
+- Hidden directories are skipped by default
+- `.github` is treated as an exception, so `.github/workflows/*.yml` can appear in the map
+- Common non-source extensions such as images, archives, binaries, and databases are skipped
 
-## 📏 トークン予算の目安
+## 📏 Token Budget Guide
 
-| 予算 | 対象規模 |
+| Budget | Typical Size |
 |------|---------|
-| 512 | 小規模（〜50ファイル） |
-| 1024 | 中規模（50-200ファイル） |
-| 2048 | 広め（200-500ファイル） |
-| 4096 | 非常に広め（500+ファイル） |
+| 512 | Small repos up to about 50 files |
+| 1024 | Medium repos around 50-200 files |
+| 2048 | Broader repos around 200-500 files |
+| 4096 | Widest repos with 500+ files |
 
-## 🔁 検証ループ
+## 🔁 Verification Loop
 
-1. まず `1024` か `2048` で実行する
-2. 出力が少なければ `--map-tokens` を増やす
-3. 出力が広すぎれば `--other-files` や `--mentioned-idents` で絞る
-4. 再実行して、読む順番を更新する
+1. Start with `1024` or `2048`
+2. If output is too small, increase `--map-tokens`
+3. If output is too broad, narrow with `--other-files` or `--mentioned-idents`
+4. Re-run and update the reading order
 
-## 🤖 Agent Skills としての利用
+## 🤖 Using As An Agent Skill
 
-このスキルは [Agent Skills 仕様](https://agentskills.io/specification) に準拠しています。対応するAIエージェント（Claude Code等）では、`SKILL.md` のメタデータに基づいて自動的にスキルが認識・実行されます。
+This project follows the [Agent Skills specification](https://agentskills.io/specification). In compatible agents such as Claude Code, the skill can be discovered and executed automatically from the `SKILL.md` metadata.
 
-```
+```text
 repo-map/
-├── SKILL.md              # スキル定義（メタデータ + 指示）
-├── scripts/              # 実行可能コード
+├── SKILL.md              # Skill definition and instructions
+├── scripts/              # Executable code
 │   ├── generate_repomap.py
 │   ├── repomap_core.py
 │   ├── special.py
 │   └── requirements.txt
-├── assets/queries/       # tree-sitter クエリ (56ファイル)
-└── references/           # 詳細ドキュメント
+├── assets/queries/       # tree-sitter query files
+└── references/           # Detailed docs
 ```
 
-## 🌐 対応言語
+## 🌐 Supported Languages
 
-Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig — 詳細は [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md)
+Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig. See [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) for details.
 
-未知の言語を含む repo では、実行前に [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) を確認してください。
+Check [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) before assuming parser support for an unfamiliar repository.
 
-## 📜 ライセンス
+## 📜 License
 
-MIT License — [Aider](https://github.com/Aider-AI/aider) (Apache 2.0) 由来のコードを含みます。
+MIT License. Includes code derived from [Aider](https://github.com/Aider-AI/aider), which is licensed under Apache 2.0.
