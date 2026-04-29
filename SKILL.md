@@ -15,19 +15,29 @@ allowed-tools: bash
 
 # Repo Map Skill
 
-Generate a structured, ranked overview of any codebase, then use that map to decide
-which files to inspect next. The goal is not only to produce a repo map, but to reduce
-search cost before deeper reading, implementation, review, refactoring, or agent handoff.
+This skill is organized around three user-facing request types:
+
+- `init`: Generate a repo map on demand and save repo-map state
+- `update`: Regenerate the map and refresh the saved state
+- `status`: Check whether saved repo-map state exists and whether it is stale
+
+Optional helper:
+
+- `view`: Show only the top saved file sections from the latest persisted map
+
+Use the map to decide which files to inspect next. The goal is not only to produce a
+repo map, but to reduce search cost before deeper reading, implementation, review,
+refactoring, or agent handoff.
 
 ## Trigger
 
-- You need to decide which files to inspect next in a codebase
+- `init`: The likely files are still unclear and you need a first repo map now
+- `update`: A repo map already exists and you want a refreshed reading order
+- `status`: You only need to know whether the saved repo map is missing or stale
 - You need to narrow candidate files before implementation, review, or refactoring
 - You need to find where a behavior, feature, integration flow, or processing path likely lives
-- The likely files are still unclear and direct search would be too broad
 - You want a first cut before using `rg`, `Read`, or Language Server Protocol tools
 - You want compact cross-file context to hand off to another agent
-- You are onboarding to an unfamiliar repository and need a first reading order
 
 ## Do Not Use
 
@@ -41,19 +51,47 @@ search cost before deeper reading, implementation, review, refactoring, or agent
 MUST:
 1. Run `python -m venv .venv`
 2. Run `pip install -r scripts/requirements.txt`
-3. Verify with `python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 1024`
+3. Start with one of these commands:
+   - `python scripts/generate_repomap.py init --repo-path /path/to/repo`
+   - `python scripts/generate_repomap.py update --repo-path /path/to/repo`
+   - `python scripts/generate_repomap.py status --repo-path /path/to/repo`
+   - `python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5`
 4. Use the ranked output to choose the next files to inspect
 
 Path arguments accept absolute paths or paths relative to `--repo-path`.
 `--mentioned-fnames` is normalized as a repo-relative path.
 
-## Basic Usage
+## Operation Modes
+
+- `init`
+  - Use when there is no saved repo map yet, or you want an explicit first snapshot
+  - Generates the map and writes `.repomap/state.json`
+- `update`
+  - Use when a saved repo map exists and you want to refresh it
+  - Regenerates the map and overwrites `.repomap/state.json`
+- `status`
+  - Use when you only need freshness information
+  - Does not regenerate the map
+  - Reports whether the saved state is missing, changed, or up to date
+- `generate`
+  - Backward-compatible direct generation mode
+  - Useful when you want stdout output without relying on saved state
+- `view`
+  - Use when you want to inspect only the top saved files without regenerating
+  - Reads `.repomap/latest_map.txt`
+  - Supports `--top-files N`
+
+Examples:
 
 ```bash
+python scripts/generate_repomap.py init --repo-path /path/to/repo
+python scripts/generate_repomap.py update --repo-path /path/to/repo
+python scripts/generate_repomap.py status --repo-path /path/to/repo
+python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
 python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
 ```
 
-This outputs a ranked tree of the codebase to stdout:
+`init`, `update`, and `generate` output a ranked tree of the codebase to stdout:
 
 ```
 src/services/user_service.py [lines 12-20]:
@@ -81,7 +119,9 @@ Do not stop at the map itself. Use it to decide the next files to inspect, then 
 
 For "where is this logic?" style requests:
 
-- If the area is unclear, start with the repo map
+- If the area is unclear and no saved map exists, use `init`
+- If the area is unclear and a saved map exists, use `status` first, then `update` if stale
+- If you only want to re-check the top-ranked files from the saved map, use `view`
 - If you know rough terms, use `--mentioned-idents`
 - If you already know the file or symbol name, skip the map and use search or direct reads
 
@@ -146,10 +186,25 @@ Header `lines` use 1-based focus-line ranges. They are not guaranteed to be the 
 When `--show-ranks` is enabled, the score matches the file display order rather than raw node PageRank.
 Lines are truncated at 100 characters. Files are ordered by importance (PageRank score), top to bottom.
 
-After generating the map, summarize:
-- The top files that matter most
-- The next 3 files worth reading
-- Why they matter for the user's request
+After generating the map, always summarize using this exact template:
+
+```text
+repo-map result:
+- likely files
+- key symbols
+- why relevant
+- confidence
+- next read commands
+```
+
+Populate the fields as follows:
+- `likely files`: 3-5 repo-relative file paths ranked by relevance
+- `key symbols`: The most relevant classes, functions, or methods seen in those files
+- `why relevant`: A short reason tied to the user's request
+- `confidence`: `high`, `medium`, or `low`
+- `next read commands`: Concrete `rg`, `sed`, or file-read commands for the next step
+
+Do not replace this template with a free-form summary.
 
 ## Examples
 

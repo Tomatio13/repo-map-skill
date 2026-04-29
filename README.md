@@ -1,8 +1,7 @@
 <h1 align="center">repo-map</h1>
 
 <p align="center">
-  An Agent Skill that generates a repo map with tree-sitter AST parsing and
-  PageRank, then uses that map to decide what files to inspect next
+  An Agent Skill for deciding what to read next in a repository
 </p>
 
 <p align="center">
@@ -14,199 +13,262 @@
 
 <p align="center">
   <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
-  <a href="README.ja.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
 </p>
 
-This Agent Skill uses tree-sitter AST parsing and PageRank to build a ranked view of a repository, then uses that output to decide which files to inspect next. It is useful for first-pass exploration, broad impact analysis, narrowing candidates before refactoring, and preparing compact cross-file context for agent handoff.
+`repo-map` builds a ranked repository view with tree-sitter and PageRank, then uses that view to decide which files to inspect next. It is designed for first-pass exploration, broad impact analysis, pre-refactor narrowing, and agent handoff.
 
 Based on [Aider](https://github.com/Aider-AI/aider)'s repomap feature.
 
-## ✨ Features
+## Using As An Agent Skill
 
-- **30+ language support** — Python, JavaScript, TypeScript, Java, Go, Rust, C/C++, Ruby, PHP, Kotlin, Swift, and more
-- **PageRank ranking** — Automatically scores file importance from the dependency graph
-- **Token budget control** — Uses binary search to fit output within a target token budget
-- **Persistent caching** — SQLite-backed cache speeds up repeated runs
-- **Choose what to read next** — Helps reduce search cost by ranking the next files to inspect
+This repository is primarily meant to be used as an Agent Skill, not just as a CLI.
 
-## 🧭 How To Use It
+Ask the agent to use `repo-map` when:
 
-1. Generate a repo map
-2. Review the top-ranked files
-3. Narrow the relevant files for the current request down to 3-5
-4. Deep-read only those files
+- the likely files are still unclear
+- direct search would still be too broad
+- you want a first reading order before deeper inspection
+- you want compact cross-file context for handoff
+- you want the top candidate files before implementation, review, or refactoring
 
-Do not stop at the map itself. Use the ranked output to decide the next 3-5 files to inspect.
+Typical user requests:
 
-## 🔁 After The First Map
+- "Use `repo-map` to find where this logic probably lives"
+- "Before searching directly, run `repo-map` and tell me the top files"
+- "Use `repo-map` and give me the next read order"
+- "Check whether the saved repo map is stale"
+- "Show me the top files from the last repo map"
 
-Use the repo map as a compressed guide before direct search, not as a replacement for search.
+What the agent should do:
 
-1. Pick the top 3-5 files from the map
-2. Deep-read only those files with `Read` or `rg`
-3. If needed, regenerate the map with `--mentioned-idents` or `--other-files`
+1. Choose the right mode: `init`, `update`, `status`, or `view`
+2. Generate or inspect the saved repo map
+3. Return the result in the required `repo-map result:` format
+4. Recommend concrete next reads instead of stopping at the map
 
-For questions like "where is this logic?", this split works well:
+## Trigger Guide
 
-- The overall area is unclear: start with a repo map
-- You vaguely know the processing name: bias the map with `--mentioned-idents`
-- You already know the function or file name: skip the map and go straight to `rg` / `Read`
+- Use `init` when no saved map exists yet and the area is still unclear
+- Use `status` when the user asks whether the map is current
+- Use `view` when the user wants only the top-ranked files from the saved map
+- Use `update` when the saved map exists but should be refreshed
+- Skip the skill when the next file or symbol is already known
 
-Example:
+## Expected Agent Output
 
-```bash
-python scripts/generate_repomap.py \
-  --repo-path ./target-repo \
-  --map-tokens 2048 \
-  --mentioned-idents "auth,login,validate_token" \
-  --exclude-glob "**/*.min.js,dist/*" \
-  --show-ranks
+After reviewing a generated map, summarize it in this exact format:
+
+```text
+repo-map result:
+- likely files
+- key symbols
+- why relevant
+- confidence
+- next read commands
 ```
 
-After that, use `Read` or `rg "auth|login|token"` only on the top-ranked files.
+Field guidance:
 
-## ✅ Good Fit
+- `likely files`: 3-5 repo-relative file paths ranked by relevance
+- `key symbols`: The classes, functions, or methods worth checking next
+- `why relevant`: A short reason tied to the current request
+- `confidence`: `high`, `medium`, or `low`
+- `next read commands`: Concrete `rg`, `sed`, or file-read commands
 
-- You want to decide what files to inspect next
-- You want to narrow candidate files before implementation, review, or refactoring
-- You want a first reading order for a repository
-- You want compact cross-file context before handing work to another agent
+## Agent Workflow
 
-## 🚫 Not A Good Fit
+The skill revolves around four modes:
 
-- You already know the next file or symbol to inspect
-- `rg` or Language Server Protocol output already narrowed the target enough
-- The repository is small enough that a direct file listing is sufficient
+- `init` — generate a repo map and save it
+- `update` — regenerate the saved repo map
+- `status` — check whether the saved repo map is stale
+- `view` — show only the top saved files in a compact table
 
-## 🚀 Quick Start
+Use `generate` only as a backward-compatible direct mode when you do not want persisted state.
+
+## CLI Quick Start
 
 ```bash
-# Install dependencies (virtual environment recommended)
-python -m venv .venv && source .venv/bin/activate
+# Install dependencies
+python -m venv .venv
+source .venv/bin/activate
 pip install -r scripts/requirements.txt
 
-# Generate a repo map
-python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 1024
+# Create the first saved map
+python scripts/generate_repomap.py init --repo-path /path/to/repo
+
+# Check whether the saved map is still fresh
+python scripts/generate_repomap.py status --repo-path /path/to/repo
+
+# Refresh the saved map
+python scripts/generate_repomap.py update --repo-path /path/to/repo
+
+# See only the top ranked files
+python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
 ```
 
-After generation, use the top-ranked files to decide what to inspect next.
+## CLI Command Guide
 
-## 📄 Example Output
+### `init`
 
-```
-src/services/user_service.py [lines 12-20]:
-12│class UserService:
-13│    def validate_input(self, payload):
+Use when no saved map exists yet, or when you want an explicit initial snapshot.
 
-src/models/user.py [lines 4-18]:
-4│class User(BaseModel):
-5│    name: str
-6│    email: str
-14│    def save(self):
-
-src/views/api.py [lines 33-35]:
-33│def get_user(request, user_id):
-34│    user = User.objects.get(id=user_id)
+```bash
+python scripts/generate_repomap.py init --repo-path /path/to/repo
 ```
 
-Files are ordered from top to bottom by PageRank score, with the main classes, functions, and methods shown for each file.
-The header `lines` use 1-based focus-line ranges. They are not guaranteed to be the full symbol span. The body also includes line numbers so you can hand exact locations to a later `Read`.
+Writes:
 
-After reviewing the output, it is usually helpful to summarize:
+- `.repomap/state.json`
+- `.repomap/latest_map.txt`
 
-- The most important file
-- The next 3 files to read
-- How each one relates to the current request
+### `update`
 
-## ⚙️ CLI Options
+Use when a saved map exists and you want a refreshed reading order.
+
+```bash
+python scripts/generate_repomap.py update --repo-path /path/to/repo
+```
+
+Typical use:
+
+1. Run `status`
+2. If stale, run `update`
+3. Run `view`
+
+### `status`
+
+Use when you only need freshness information.
+
+```bash
+python scripts/generate_repomap.py status --repo-path /path/to/repo
+```
+
+Example output:
+
+```text
+repo-map status:
+- state file: /path/to/repo/.repomap/state.json
+- repo path: /path/to/repo
+- generated at: 2026-04-30T00:00:00+00:00
+- tracked files: 42
+- current files: 42
+- stale: no
+- reason: up_to_date
+```
+
+`status` does not print the repo map itself.
+
+### `view`
+
+Use when you want a compact view of the saved top-ranked files without regenerating.
+
+```bash
+python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
+```
+
+Example output:
+
+```text
+repo-map view:
+- map file: /path/to/repo/.repomap/latest_map.txt
+- top files: 3
+
+┌──────┬──────────────────────┬──────────────┬────────────────────────────┐
+│ rank │ file                 │ lines        │ key symbol                 │
+├──────┼──────────────────────┼──────────────┼────────────────────────────┤
+│    1 │ src/app/service.ts   │ [lines 1-12] │ export class UserService   │
+│    2 │ src/app/models.ts    │ [lines 3-18] │ export interface User      │
+│    3 │ src/app/api.ts       │ [lines 8-15] │ export function getUser    │
+└──────┴──────────────────────┴──────────────┴────────────────────────────┘
+```
+
+### `generate`
+
+Use when you want plain stdout output without relying on saved state.
+
+```bash
+python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
+```
+
+## CLI Options
 
 ### Required
 
-- `--repo-path`: Repository root path
+- `--repo-path`: repository root path
 
 ### Scope Control
 
-- `--chat-files`: Files to exclude because they are already in context
-- `--other-files`: Explicit file set to include; auto-discovers files if omitted
-- `--exclude-glob`: Glob patterns to exclude from auto-discovery, such as `**/*.min.js,dist/*`
+- `--chat-files`: exclude files already in context
+- `--other-files`: explicit file set to include
+- `--exclude-glob`: exclude files from auto-discovery, for example `**/*.min.js,dist/*`
 
 ### Ranking Hints
 
-- `--mentioned-fnames`: Filenames to boost. Accepts absolute paths or paths relative to `--repo-path`
-- `--mentioned-idents`: Identifiers to boost in ranking
+- `--mentioned-fnames`: boost filenames in ranking
+- `--mentioned-idents`: boost identifiers in ranking
 
 ### Budget And Debug
 
-- `--map-tokens`: Maximum output token budget. Default is `1024`
-- `--no-cache`: Disable cache and always recompute
-- `--verbose`: Print progress and debug information to stderr
+- `--map-tokens`: maximum output token budget, default `1024`
+- `--no-cache`: disable cache and always recompute
+- `--show-ranks`: show ranking scores in the raw repo-map output
+- `--verbose`: print progress and debug information to stderr
+- `--state-file`: custom saved state path
+- `--map-file`: custom saved map path
+- `--top-files`: number of rows to show in `view`, default `5`
 
-`--chat-files` and `--other-files` also accept absolute paths or paths relative to `--repo-path`.
-`--exclude-glob` is evaluated against repo-relative paths.
-Add `--show-ranks` to include each file's ranking score in the header, aligned with the display order.
+## How It Works
 
-## 🧠 How It Works
+1. Parse source files with tree-sitter
+2. Build a cross-file dependency graph
+3. Rank files with PageRank
+4. Render the best fitting output within the token budget
+5. Save state and saved map for `status` and `view`
 
-1. **Parse** — tree-sitter parses the source code AST and extracts definitions and references
-2. **Rank** — a directed graph is built across files and scored with PageRank
-3. **Render** — binary search fits the best output into the token budget
+## Features
 
-If minified assets or build artifacts dominate the map, add `--exclude-glob "**/*.min.js,dist/*"` to improve the ranking.
+- 30+ language support
+- tree-sitter-based symbol extraction
+- PageRank-based file ranking
+- token budget control
+- persistent cache
+- saved state and stale detection
+- saved top-file view
 
-Ranking multipliers:
-
-| Condition | Multiplier |
-|------|------|
-| Identifier mentioned by the user | 10x |
-| Meaningful name (snake_case etc., 8+ chars) | 10x |
-| Private (`_` prefix) | 0.1x |
-| Generic name defined in 5+ files | 0.1x |
-| Reference from a chat file | 50x |
-
-## 🔎 Auto-discovery
+## Auto-discovery Rules
 
 - Hidden directories are skipped by default
-- `.github` is treated as an exception, so `.github/workflows/*.yml` can appear in the map
-- Common non-source extensions such as images, archives, binaries, and databases are skipped
+- `.github/workflows/*.yml` is kept as an exception
+- Common binary and non-source extensions are skipped
 
-## 📏 Token Budget Guide
+## Token Budget Guide
 
-| Budget | Typical Size |
-|------|---------|
-| 512 | Small repos up to about 50 files |
-| 1024 | Medium repos around 50-200 files |
-| 2048 | Broader repos around 200-500 files |
-| 4096 | Widest repos with 500+ files |
+- `512`: small repos up to about 50 files
+- `1024`: medium repos around 50-200 files
+- `2048`: broader repos around 200-500 files
+- `4096`: very broad repos with 500+ files
 
-## 🔁 Verification Loop
-
-1. Start with `1024` or `2048`
-2. If output is too small, increase `--map-tokens`
-3. If output is too broad, narrow with `--other-files` or `--mentioned-idents`
-4. Re-run and update the reading order
-
-## 🤖 Using As An Agent Skill
-
-This project follows the [Agent Skills specification](https://agentskills.io/specification). In compatible agents such as Claude Code, the skill can be discovered and executed automatically from the `SKILL.md` metadata.
+## Agent Skill Layout
 
 ```text
 repo-map/
-├── SKILL.md              # Skill definition and instructions
-├── scripts/              # Executable code
+├── SKILL.md
+├── scripts/
 │   ├── generate_repomap.py
 │   ├── repomap_core.py
 │   ├── special.py
 │   └── requirements.txt
-├── assets/queries/       # tree-sitter query files
-└── references/           # Detailed docs
+├── assets/queries/
+└── references/
 ```
 
-## 🌐 Supported Languages
+## Supported Languages
 
-Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig. See [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) for details.
+Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig.
 
-Check [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) before assuming parser support for an unfamiliar repository.
+See [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) for details.
 
-## 📜 License
+## License
 
 MIT License. Includes code derived from [Aider](https://github.com/Aider-AI/aider), which is licensed under Apache 2.0.

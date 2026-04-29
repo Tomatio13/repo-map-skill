@@ -3,16 +3,36 @@ import sys
 import tempfile
 import unittest
 from collections import defaultdict
+from io import StringIO
 from types import SimpleNamespace
 from unittest import mock
 
 from scripts.generate_repomap import (
+    build_state_payload,
+    build_view_rows,
     discover_files,
+    evaluate_staleness,
+    format_status_report,
+    format_view_report,
+    load_state_file,
+    load_map_file,
     parse_args,
     parse_file_list,
     parse_mentioned_fnames,
+    resolve_map_output_path,
+    resolve_state_path,
+    select_top_map_sections,
+    write_map_file,
+    write_state_file,
 )
-from scripts.repomap_core import RepoMap, Tag
+
+try:
+    from scripts.repomap_core import RepoMap, Tag
+    REPOMAP_CORE_IMPORT_ERROR = None
+except ModuleNotFoundError as exc:
+    RepoMap = None
+    Tag = None
+    REPOMAP_CORE_IMPORT_ERROR = exc
 
 
 class FakeNode:
@@ -90,7 +110,258 @@ class RepoMapCliTests(unittest.TestCase):
 
         self.assertEqual(args.exclude_glob, "**/*.min.js")
 
+    def test_parse_args_supports_status_command(self):
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["generate_repomap.py", "status", "--repo-path", "/tmp/example-repo"],
+        ):
+            args = parse_args()
 
+        self.assertEqual(args.command, "status")
+
+    def test_parse_args_supports_view_command(self):
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["generate_repomap.py", "view", "--repo-path", "/tmp/example-repo", "--top-files", "3"],
+        ):
+            args = parse_args()
+
+        self.assertEqual(args.command, "view")
+        self.assertEqual(args.top_files, 3)
+
+    def test_resolve_state_path_defaults_under_repo(self):
+        state_path = resolve_state_path("/tmp/example-repo", "")
+
+        self.assertEqual(state_path, "/tmp/example-repo/.repomap/state.json")
+
+    def test_resolve_map_output_path_defaults_under_repo(self):
+        map_path = resolve_map_output_path("/tmp/example-repo", "")
+
+        self.assertEqual(map_path, "/tmp/example-repo/.repomap/latest_map.txt")
+
+    def test_evaluate_staleness_reports_missing_state(self):
+        stale, reason = evaluate_staleness(
+            state=None,
+            repo_path="/tmp/example-repo",
+            current_files=[],
+            map_tokens=1024,
+            chat_files=set(),
+            exclude_globs=[],
+            mentioned_fnames=set(),
+            mentioned_idents=set(),
+        )
+
+        self.assertTrue(stale)
+        self.assertEqual(reason, "missing_state")
+
+    def test_state_round_trip_and_up_to_date_status(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            state_path = resolve_state_path(repo_dir, "")
+            payload = build_state_payload(
+                repo_path=repo_dir,
+                state_path=state_path,
+                command="init",
+                map_tokens=1024,
+                chat_files=set(),
+                other_files={source},
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+            write_state_file(state_path, payload)
+            state = load_state_file(state_path)
+
+            stale, reason = evaluate_staleness(
+                state=state,
+                repo_path=repo_dir,
+                current_files=[source],
+                map_tokens=1024,
+                chat_files=set(),
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+        self.assertFalse(stale)
+        self.assertEqual(reason, "up_to_date")
+
+    def test_evaluate_staleness_detects_tracked_file_changes(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            added = os.path.join(repo_dir, "added.py")
+            for path in (source, added):
+                with open(path, "w", encoding="utf-8") as handle:
+                    handle.write("print('ok')\n")
+
+            state_path = resolve_state_path(repo_dir, "")
+            payload = build_state_payload(
+                repo_path=repo_dir,
+                state_path=state_path,
+                command="init",
+                map_tokens=1024,
+                chat_files=set(),
+                other_files={source},
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+            stale, reason = evaluate_staleness(
+                state=payload,
+                repo_path=repo_dir,
+                current_files=[source, added],
+                map_tokens=1024,
+                chat_files=set(),
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+        self.assertTrue(stale)
+        self.assertEqual(reason, "tracked_files_changed")
+
+    def test_format_status_report_includes_staleness(self):
+        report = format_status_report(
+            state_path="/tmp/example-repo/.repomap/state.json",
+            repo_path="/tmp/example-repo",
+            state={
+                "generated_at": "2026-04-30T00:00:00+00:00",
+                "tracked_file_count": 3,
+            },
+            stale=True,
+            reason="tracked_files_changed",
+            current_files=["a.py", "b.py"],
+        )
+
+        self.assertIn("repo-map status:", report)
+        self.assertIn("- stale: yes", report)
+        self.assertIn("- reason: tracked_files_changed", report)
+
+    def test_select_top_map_sections_limits_output(self):
+        map_text = "\n\n".join(
+            [
+                "a.py [lines 1-2]:\n1│def alpha():",
+                "b.py [lines 3-4]:\n3│def beta():",
+                "c.py [lines 5-6]:\n5│def gamma():",
+            ]
+        )
+
+        selected = select_top_map_sections(map_text, 2)
+
+        self.assertIn("a.py", selected)
+        self.assertIn("b.py", selected)
+        self.assertNotIn("c.py", selected)
+
+    def test_build_view_rows_extracts_table_fields(self):
+        rows = build_view_rows(
+            "a.py [lines 1-2]:\n1│def alpha():\n\nb.py [lines 3-4]:\n3│class Beta:",
+            2,
+        )
+
+        self.assertEqual(rows[0]["rank"], 1)
+        self.assertEqual(rows[0]["file"], "a.py")
+        self.assertEqual(rows[0]["lines"], "[lines 1-2]")
+        self.assertEqual(rows[0]["key_symbol"], "def alpha():")
+
+    def test_build_view_rows_skips_elided_lines_and_prefers_lines_summary(self):
+        rows = build_view_rows(
+            "Tool.ts [score=0.019866] [lines 10-20]:\n...⋮...\n15│export type ToolUseContext = {}\n",
+            1,
+        )
+
+        self.assertEqual(rows[0]["file"], "Tool.ts")
+        self.assertEqual(rows[0]["lines"], "[lines 10-20]")
+        self.assertEqual(rows[0]["key_symbol"], "export type ToolUseContext = {}")
+
+    def test_write_and_load_map_file_round_trip(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            map_path = resolve_map_output_path(repo_dir, "")
+            write_map_file(map_path, "a.py [lines 1-2]:\n1│def alpha():\n")
+
+            loaded = load_map_file(map_path)
+
+        self.assertIn("a.py", loaded)
+
+    def test_format_view_report_includes_selected_sections(self):
+        report = format_view_report(
+            map_path="/tmp/example-repo/.repomap/latest_map.txt",
+            top_files=1,
+            map_text="a.py [lines 1-2]:\n1│def alpha():\n\nb.py [lines 3-4]:\n3│def beta():",
+        )
+
+        self.assertIn("repo-map view:", report)
+        self.assertIn("- top files: 1", report)
+        self.assertIn("┌", report)
+        self.assertIn("│ rank │", report)
+        self.assertIn("a.py", report)
+        self.assertNotIn("b.py [lines 3-4]", report)
+
+    def test_main_status_returns_zero_when_state_is_fresh(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            from scripts import generate_repomap as cli
+
+            state_path = resolve_state_path(repo_dir, "")
+            payload = build_state_payload(
+                repo_path=repo_dir,
+                state_path=state_path,
+                command="init",
+                map_tokens=1024,
+                chat_files=set(),
+                other_files={source},
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+            write_state_file(state_path, payload)
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["generate_repomap.py", "status", "--repo-path", repo_dir]),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", stderr),
+            ):
+                with self.assertRaises(SystemExit) as exit_info:
+                    cli.main()
+
+        self.assertEqual(exit_info.exception.code, 0)
+        self.assertIn("- stale: no", stdout.getvalue())
+
+    def test_main_view_prints_saved_top_files(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            from scripts import generate_repomap as cli
+
+            map_path = resolve_map_output_path(repo_dir, "")
+            write_map_file(
+                map_path,
+                "a.py [lines 1-2]:\n1│def alpha():\n\nb.py [lines 3-4]:\n3│def beta():\n",
+            )
+
+            stdout = StringIO()
+            stderr = StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["generate_repomap.py", "view", "--repo-path", repo_dir, "--top-files", "1"]),
+                mock.patch("sys.stdout", stdout),
+                mock.patch("sys.stderr", stderr),
+            ):
+                cli.main()
+
+        self.assertIn("repo-map view:", stdout.getvalue())
+        self.assertIn("a.py", stdout.getvalue())
+        self.assertNotIn("b.py [lines 3-4]", stdout.getvalue())
+
+
+@unittest.skipIf(REPOMAP_CORE_IMPORT_ERROR is not None, f"repomap_core deps unavailable: {REPOMAP_CORE_IMPORT_ERROR}")
 class RepoMapTagExtractionTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()

@@ -1,8 +1,7 @@
 <h1 align="center">repo-map</h1>
 
 <p align="center">
-  tree-sitter AST解析と PageRank を使って repo map を生成し、
-  次に読むファイルを決める Agent Skill
+  repo で次に読むファイルを決める Agent Skill
 </p>
 
 <p align="center">
@@ -13,200 +12,263 @@
 </p>
 
 <p align="center">
-  <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
   <a href="README.ja.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
 </p>
 
-Agent Skills 仕様準拠のスキルです。tree-sitter AST解析と PageRank を用いてリポジトリ全体をランキング付きで俯瞰し、その結果を使って次に読むファイルを決めます。初回探索、広い影響範囲の調査、リファクタ前の候補絞り込み、agent handoff 用の圧縮コンテキスト作成に向いています。
+`repo-map` は tree-sitter の AST 解析と PageRank を使って repository 全体をランキング付きで俯瞰し、次にどのファイルを読むべきかを決めるスキルです。初回探索、広い影響範囲の調査、リファクタ前の候補絞り込み、agent handoff 用の圧縮コンテキスト作成に向いています。
 
 Based on [Aider](https://github.com/Aider-AI/aider)'s repomap feature.
 
-## ✨ 特徴
+## Agent Skill としての使い方
 
-- **30+言語対応** — Python, JavaScript, TypeScript, Java, Go, Rust, C/C++, Ruby, PHP, Kotlin, Swift 等
-- **PageRank ランキング** — ファイル間の依存関係グラフから重要度を自動判定
-- **トークン予算制御** — 指定トークン数内に収まるよう二分探索で最適化
-- **キャッシュ機能** — SQLiteベースの永続キャッシュで2回目以降は高速
-- **次の読む対象を決める** — 上位ファイルから読む順番を決めて探索コストを下げる
+この repository は CLI ツールというより、まず Agent Skill として使う前提です。
 
-## 🧭 どう使うか
+次のような時に agent に `repo-map` を使わせます。
 
-1. repo map を生成する
-2. 上位ファイルを見る
-3. 今の依頼に関係するファイルを 3〜5 個に絞る
-4. そのファイルだけ深掘りする
+- どのファイルを次に読むべきかまだ分からない
+- 直接 `rg` しても範囲が広すぎる
+- 深掘り前に最初の読む順番が欲しい
+- 実装、レビュー、リファクタ前に候補ファイルを絞りたい
+- 別 agent へ渡す前に圧縮した cross-file context が欲しい
 
-生成した repo map は、概要表示で終わらせず、次に読む 3〜5 ファイルを決めるために使います。
+ユーザー依頼の例:
 
-## 🔁 二手目以降
+- 「`repo-map` でこの処理がありそうな場所を当てて」
+- 「直接検索する前に `repo-map` を使って上位ファイルを出して」
+- 「`repo-map` を使って次に読む順番を決めて」
+- 「保存済み repo map が stale か確認して」
+- 「前回の repo map の上位だけ見せて」
 
-repo map は検索の代わりではなく、検索前の圧縮ガイドとして使います。
+agent がやること:
 
-1. repo map から上位 3〜5 ファイルを選ぶ
-2. そのファイルだけ `Read` や `rg` で深掘りする
-3. 足りなければ `--mentioned-idents` や `--other-files` を付けて再生成する
+1. `init` `update` `status` `view` のどれを使うか決める
+2. repo map を生成するか、保存済み state を確認する
+3. 必須の `repo-map result:` 形式で要約する
+4. map を出して終わらず、次に読むコマンドまで提案する
 
-`こういう処理どこ？` のような質問では、次の使い分けが実務的です。
+## Trigger ガイド
 
-- 全体像が曖昧: まず map を作る
-- 処理名がぼんやり分かる: `--mentioned-idents` で寄せる
-- 関数名やファイル名が既知: map を飛ばして `rg` / `Read` に直行する
+- 保存済み map がまだ無く、対象領域も曖昧: `init`
+- map が最新かだけ知りたい: `status`
+- 保存済み map の上位だけ見たい: `view`
+- 保存済み map はあるが更新したい: `update`
+- 次に読む file や symbol がすでに分かっている: この skill を使わない
 
-例:
+## 期待する出力
 
-```bash
-python scripts/generate_repomap.py \
-  --repo-path ./target-repo \
-  --map-tokens 2048 \
-  --mentioned-idents "auth,login,validate_token" \
-  --exclude-glob "**/*.min.js,dist/*" \
-  --show-ranks
+生成した map を見た後は、必ず次の形式で要約します。
+
+```text
+repo-map result:
+- likely files
+- key symbols
+- why relevant
+- confidence
+- next read commands
 ```
 
-この出力を見た後は、上位ファイルだけを対象に `Read` や `rg "auth|login|token"` を使って絞り込みます。
+各項目の意味:
 
-## ✅ 使うべき時
+- `likely files`: 関連度順の repo-relative file path を 3〜5 件
+- `key symbols`: 次に確認すべきクラス・関数・メソッド
+- `why relevant`: 今の依頼との関係を短く説明
+- `confidence`: `high` `medium` `low`
+- `next read commands`: 具体的な `rg` `sed` `Read` 系コマンド
 
-- 次にどのファイルを読めばよいか決めたい時
-- 実装、レビュー、リファクタ前に候補ファイルを絞りたい時
-- repo の初回探索で読む順番を決めたい時
-- 別 agent に渡す前に cross-file の圧縮コンテキストを作りたい時
+## 基本フロー
 
-## 🚫 使わない方がいい時
+現在の主導線はこの4コマンドです。
 
-- 次に読むファイルやシンボルがすでに決まっている
-- `rg` や Language Server Protocol で十分に絞れている
-- 小さな repo で一覧を見るだけで足りる
+- `init` — repo map を生成して保存する
+- `update` — 保存済み repo map を再生成する
+- `status` — 保存済み repo map が stale かどうか確認する
+- `view` — 保存済み map の上位ファイルだけを表で見る
 
-## 🚀 クイックスタート
+保存状態を使わず、その場で標準出力だけ欲しい時は後方互換の `generate` を使います。
+
+## CLI クイックスタート
 
 ```bash
-# 依存インストール（仮想環境推奨）
-python -m venv .venv && source .venv/bin/activate
+# 依存インストール
+python -m venv .venv
+source .venv/bin/activate
 pip install -r scripts/requirements.txt
 
-# リポジトリマップ生成
-python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 1024
+# 最初の保存済み map を作る
+python scripts/generate_repomap.py init --repo-path /path/to/repo
+
+# stale かどうか確認する
+python scripts/generate_repomap.py status --repo-path /path/to/repo
+
+# 保存済み map を更新する
+python scripts/generate_repomap.py update --repo-path /path/to/repo
+
+# 上位ファイルだけを見る
+python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
 ```
 
-生成後は、上位に出たファイルから次に読む対象を決めてください。
+## CLI コマンドガイド
 
-## 📄 出力例
+### `init`
 
-```
-src/services/user_service.py [lines 12-20]:
-12│class UserService:
-13│    def validate_input(self, payload):
+保存済み map がまだ無い時、または明示的に最初のスナップショットを作りたい時に使います。
 
-src/models/user.py [lines 4-18]:
-4│class User(BaseModel):
-5│    name: str
-6│    email: str
-14│    def save(self):
-
-src/views/api.py [lines 33-35]:
-33│def get_user(request, user_id):
-34│    user = User.objects.get(id=user_id)
+```bash
+python scripts/generate_repomap.py init --repo-path /path/to/repo
 ```
 
-ファイルは PageRank スコア順に上から並び、各ファイルの主要なクラス・関数・メソッドが表示されます。
-見出しの `lines` は 1-based の注目行範囲です。シンボル本体全体の厳密な span ではありません。本文も行番号付きなので、そのままピンポイントで `Read` に渡せます。
+作成されるファイル:
 
-この出力を見た後は、次をまとめると実務で使いやすいです。
+- `.repomap/state.json`
+- `.repomap/latest_map.txt`
 
-- 最重要ファイル
-- 次に読む 3 ファイル
-- それぞれが依頼にどう関係するか
+### `update`
 
-## ⚙️ CLI オプション
+保存済み map はあるが、読む順番を更新したい時に使います。
+
+```bash
+python scripts/generate_repomap.py update --repo-path /path/to/repo
+```
+
+実務的には次の流れが基本です。
+
+1. `status` を見る
+2. stale なら `update` する
+3. `view` で上位を見る
+
+### `status`
+
+鮮度だけ見たい時に使います。
+
+```bash
+python scripts/generate_repomap.py status --repo-path /path/to/repo
+```
+
+出力例:
+
+```text
+repo-map status:
+- state file: /path/to/repo/.repomap/state.json
+- repo path: /path/to/repo
+- generated at: 2026-04-30T00:00:00+00:00
+- tracked files: 42
+- current files: 42
+- stale: no
+- reason: up_to_date
+```
+
+`status` では repo map 本文は出しません。
+
+### `view`
+
+再生成せず、保存済みの上位ファイルだけを素早く見たい時に使います。
+
+```bash
+python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
+```
+
+出力例:
+
+```text
+repo-map view:
+- map file: /path/to/repo/.repomap/latest_map.txt
+- top files: 3
+
+┌──────┬──────────────────────┬──────────────┬────────────────────────────┐
+│ rank │ file                 │ lines        │ key symbol                 │
+├──────┼──────────────────────┼──────────────┼────────────────────────────┤
+│    1 │ src/app/service.ts   │ [lines 1-12] │ export class UserService   │
+│    2 │ src/app/models.ts    │ [lines 3-18] │ export interface User      │
+│    3 │ src/app/api.ts       │ [lines 8-15] │ export function getUser    │
+└──────┴──────────────────────┴──────────────┴────────────────────────────┘
+```
+
+### `generate`
+
+保存状態を使わず、その場で標準出力へ map を出したい時に使います。
+
+```bash
+python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
+```
+
+## CLI オプション
 
 ### 必須
 
-- `--repo-path`: リポジトリのルートパス
+- `--repo-path`: repository root path
 
 ### 範囲の絞り込み
 
-- `--chat-files`: すでに文脈にあるので除外したいファイル
-- `--other-files`: 対象ファイルを明示したい時に使う。省略時は自動探索
-- `--exclude-glob`: 自動探索から除外する glob。`**/*.min.js,dist/*` のように指定
+- `--chat-files`: すでに文脈にあるファイルを除外する
+- `--other-files`: 対象ファイルを明示する
+- `--exclude-glob`: 自動探索から除外する。例: `**/*.min.js,dist/*`
 
 ### ランキング補助
 
-- `--mentioned-fnames`: ランキングをブーストするファイル名。絶対パスまたは `--repo-path` 基準の相対パス
-- `--mentioned-idents`: ランキングをブーストする識別子
+- `--mentioned-fnames`: ファイル名をブーストする
+- `--mentioned-idents`: 識別子をブーストする
 
 ### 予算とデバッグ
 
-- `--map-tokens`: 出力の最大トークン数。デフォルトは `1024`
-- `--no-cache`: キャッシュ無効。常に再計算
-- `--verbose`: 進捗・デバッグ情報を stderr に出力
+- `--map-tokens`: 出力トークン予算。デフォルト `1024`
+- `--no-cache`: キャッシュを使わず常に再計算
+- `--show-ranks`: 生の repo-map 出力に ranking score を表示
+- `--verbose`: 進捗とデバッグ情報を stderr に出す
+- `--state-file`: 保存 state のカスタムパス
+- `--map-file`: 保存 map のカスタムパス
+- `--top-files`: `view` の表示件数。デフォルト `5`
 
-`--chat-files` と `--other-files` も、絶対パスまたは `--repo-path` 基準の相対パスを受け付けます。
-`--exclude-glob` は repo-relative path に対して評価されます。
-`--show-ranks` を付けると、各ファイル見出しに表示順と対応した ranking score を表示します。
+## 仕組み
 
-## 🧠 仕組み
+1. tree-sitter で source file を parse する
+2. file 間の dependency graph を作る
+3. PageRank で file の重要度を出す
+4. token budget に収まる形で出力を render する
+5. `status` と `view` 用に state と saved map を保存する
 
-1. **Parse** — tree-sitter でソースコードをAST解析し、シンボルの定義（クラス・関数）と参照（呼び出し）を抽出
-2. **Rank** — ファイル間の依存関係から有向グラフを構築し、PageRank で重要度をランキング
-3. **Render** — トークン予算内に収まるよう二分探索で最適なタグ数を決定し、コード行付きツリーを出力
+## 特徴
 
-minified asset や build artifact が強く出る repo では、`--exclude-glob "**/*.min.js,dist/*"` を付けると精度が上がります。
+- 30+ 言語対応
+- tree-sitter ベースの symbol 抽出
+- PageRank ベースの file ranking
+- token budget 制御
+- 永続キャッシュ
+- saved state と stale 判定
+- saved top-file view
 
-ランキングの重み付け要素:
+## 自動探索ルール
 
-| 条件 | 乗数 |
-|------|------|
-| ユーザーが言及した識別子 | 10x |
-| 意味のある名前（snake_case等、8文字以上） | 10x |
-| プライベート（`_`始まり） | 0.1x |
-| 5ファイル以上で定義される汎用名 | 0.1x |
-| チャット内ファイルからの参照 | 50x |
+- hidden directory は通常除外
+- `.github/workflows/*.yml` は例外的に対象に残す
+- 一般的な binary / non-source 拡張子は除外
 
-## 🔎 自動探索
+## トークン予算の目安
 
-- 通常の hidden directory は除外されます
-- ただし `.github` は例外で、`.github/workflows/*.yml` は重要ファイルとして map に残ります
-- 画像、アーカイブ、バイナリ、DB などの一般的な非ソース拡張子は除外されます
+- `512`: 小規模 repo。おおむね 50 file まで
+- `1024`: 中規模 repo。おおむね 50〜200 file
+- `2048`: 広めの repo。おおむね 200〜500 file
+- `4096`: かなり広い repo。500+ file
 
-## 📏 トークン予算の目安
+## Agent Skill の構成
 
-| 予算 | 対象規模 |
-|------|---------|
-| 512 | 小規模（〜50ファイル） |
-| 1024 | 中規模（50-200ファイル） |
-| 2048 | 広め（200-500ファイル） |
-| 4096 | 非常に広め（500+ファイル） |
-
-## 🔁 検証ループ
-
-1. まず `1024` か `2048` で実行する
-2. 出力が少なければ `--map-tokens` を増やす
-3. 出力が広すぎれば `--other-files` や `--mentioned-idents` で絞る
-4. 再実行して、読む順番を更新する
-
-## 🤖 Agent Skills としての利用
-
-このスキルは [Agent Skills 仕様](https://agentskills.io/specification) に準拠しています。対応するAIエージェント（Claude Code等）では、`SKILL.md` のメタデータに基づいて自動的にスキルが認識・実行されます。
-
-```
+```text
 repo-map/
-├── SKILL.md              # スキル定義（メタデータ + 指示）
-├── scripts/              # 実行可能コード
+├── SKILL.md
+├── scripts/
 │   ├── generate_repomap.py
 │   ├── repomap_core.py
 │   ├── special.py
 │   └── requirements.txt
-├── assets/queries/       # tree-sitter クエリ (56ファイル)
-└── references/           # 詳細ドキュメント
+├── assets/queries/
+└── references/
 ```
 
-## 🌐 対応言語
+## 対応言語
 
-Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig — 詳細は [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md)
+Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig.
 
-未知の言語を含む repo では、実行前に [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) を確認してください。
+詳細は [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) を参照してください。
 
-## 📜 ライセンス
+## ライセンス
 
-MIT License — [Aider](https://github.com/Aider-AI/aider) (Apache 2.0) 由来のコードを含みます。
+MIT License. Includes code derived from [Aider](https://github.com/Aider-AI/aider), which is licensed under Apache 2.0.
