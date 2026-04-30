@@ -38,13 +38,19 @@ Tag = namedtuple("Tag", "rel_fname fname line end_line name kind".split())
 
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError, OSError)
 
-CACHE_VERSION = 5
+CACHE_VERSION = 6
 if USING_TSL_PACK:
-    CACHE_VERSION = 5
+    CACHE_VERSION = 6
 
 UPDATING_REPO_MAP_MESSAGE = "Updating repo map"
 
 _tokenizer = tiktoken.get_encoding("cl100k_base")
+
+LANGUAGE_EXTENSION_FALLBACKS = {
+    ".cbl": "cobol",
+    ".cob": "cobol",
+    ".cpy": "cobol",
+}
 
 
 class SimpleIO:
@@ -100,6 +106,15 @@ def get_scm_fname(lang):
         return path
 
     return None
+
+
+def resolve_language_name(fname):
+    lang = filename_to_lang(fname)
+    if lang:
+        return lang
+
+    suffix = Path(fname).suffix.lower()
+    return LANGUAGE_EXTENSION_FALLBACKS.get(suffix)
 
 
 class RepoMap:
@@ -321,7 +336,7 @@ class RepoMap:
         return cursor.captures(node)
 
     def get_tags_raw(self, fname, rel_fname):
-        lang = filename_to_lang(fname)
+        lang = resolve_language_name(fname)
         if not lang:
             return
 
@@ -785,6 +800,15 @@ class RepoMap:
 
     tree_cache = dict()
 
+    @staticmethod
+    def render_plain_context(code, lois):
+        lines = code.splitlines()
+        selected = []
+        for line_no in sorted(set(lois)):
+            if 0 <= line_no < len(lines):
+                selected.append(f"{line_no + 1}│{lines[line_no]}")
+        return "\n".join(selected) + ("\n" if selected else "")
+
     def render_tree(self, abs_fname, rel_fname, lois):
         mtime = self.get_mtime(abs_fname)
         key = (rel_fname, tuple(sorted(lois)), mtime)
@@ -800,25 +824,34 @@ class RepoMap:
             if not code.endswith("\n"):
                 code += "\n"
 
-            context = TreeContext(
-                rel_fname,
-                code,
-                color=False,
-                line_number=True,
-                child_context=False,
-                last_line=False,
-                margin=0,
-                mark_lois=False,
-                loi_pad=0,
-                show_top_of_file_parent_scope=False,
-            )
-            self.tree_context_cache[rel_fname] = {"context": context, "mtime": mtime}
+            try:
+                context = TreeContext(
+                    rel_fname,
+                    code,
+                    color=False,
+                    line_number=True,
+                    child_context=False,
+                    last_line=False,
+                    margin=0,
+                    mark_lois=False,
+                    loi_pad=0,
+                    show_top_of_file_parent_scope=False,
+                )
+            except ValueError as err:
+                if "Unknown language" in str(err):
+                    context = None
+                else:
+                    raise
+            self.tree_context_cache[rel_fname] = {"context": context, "mtime": mtime, "code": code}
 
         context = self.tree_context_cache[rel_fname]["context"]
-        context.lines_of_interest = set()
-        context.add_lines_of_interest(lois)
-        context.add_context()
-        res = context.format()
+        if context is None:
+            res = self.render_plain_context(self.tree_context_cache[rel_fname]["code"], lois)
+        else:
+            context.lines_of_interest = set()
+            context.add_lines_of_interest(lois)
+            context.add_context()
+            res = context.format()
         self.tree_cache[key] = res
         return res
 

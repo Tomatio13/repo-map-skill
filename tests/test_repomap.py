@@ -307,6 +307,27 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertEqual(rows[0]["lines"], "[lines 10-20]")
         self.assertEqual(rows[0]["key_symbol"], "export type ToolUseContext = {}")
 
+    def test_build_view_rows_prefers_cobol_paragraph_over_program_id(self):
+        rows = build_view_rows(
+            "cbl/COUSR02C.cbl [lines 23, 82]:\n23│       PROGRAM-ID. COUSR02C.\n82│       MAIN-PARA.\n",
+            1,
+        )
+
+        self.assertEqual(rows[0]["key_symbol"], "MAIN-PARA.")
+
+    def test_build_view_rows_prefers_numbered_cobol_paragraph_over_fd(self):
+        rows = build_view_rows(
+            (
+                "cbl/COBTUPDT.cbl [lines 23, 39, 82]:\n"
+                "23│       PROGRAM-ID. COBTUPDT.\n"
+                "39│       FD TR-RECORD RECORDING MODE F.\n"
+                "82│       0001-OPEN-FILES.\n"
+            ),
+            1,
+        )
+
+        self.assertEqual(rows[0]["key_symbol"], "0001-OPEN-FILES.")
+
     def test_write_and_load_map_file_round_trip(self):
         with tempfile.TemporaryDirectory() as repo_dir:
             map_path = resolve_map_output_path(repo_dir, "")

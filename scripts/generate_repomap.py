@@ -10,6 +10,7 @@ import argparse
 import fnmatch
 import json
 import os
+import re
 import sys
 import time
 import unicodedata
@@ -308,6 +309,7 @@ def parse_map_section(section, rank):
             line_summary = score_candidates[0]
 
     key_symbol = ""
+    best_score = None
     for body_line in lines[1:]:
         stripped = body_line.strip()
         if stripped in {"...⋮...", "..."}:
@@ -318,8 +320,10 @@ def parse_map_section(section, rank):
             candidate = stripped
         if candidate in {"...⋮...", "..."}:
             continue
-        key_symbol = candidate
-        break
+        score = score_key_symbol_candidate(candidate)
+        if best_score is None or score > best_score:
+            best_score = score
+            key_symbol = candidate
 
     if not key_symbol:
         key_symbol = "(no symbol shown)"
@@ -330,6 +334,33 @@ def parse_map_section(section, rank):
         "lines": line_summary.strip(),
         "key_symbol": key_symbol,
     }
+
+
+def score_key_symbol_candidate(candidate):
+    score = 0
+    if candidate.startswith("PROGRAM-ID."):
+        score -= 10
+    if candidate.startswith("COPY "):
+        score -= 3
+    if candidate.startswith("FD "):
+        score -= 6
+    if candidate.startswith("01 "):
+        score -= 5
+    if candidate.startswith("05 "):
+        score -= 4
+    if " PIC " in candidate:
+        score -= 3
+    if candidate.endswith("SECTION."):
+        score += 8
+    if re.match(r"^[A-Z][A-Z0-9-]*\.$", candidate):
+        score += 12
+    if re.match(r"^[0-9]{3,}-[A-Z0-9-]*\.$", candidate):
+        score += 16
+    if re.match(r"^[0-9]{2}\s+[A-Z0-9-]+\b", candidate):
+        score -= 3
+    if re.match(r"^[A-Z0-9-]+\.$", candidate):
+        score += 12
+    return score
 
 
 def build_view_rows(map_text, top_files):

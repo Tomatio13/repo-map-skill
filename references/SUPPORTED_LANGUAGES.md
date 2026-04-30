@@ -10,6 +10,7 @@ Check this list before assuming parser support for an unfamiliar repository.
 | C++ | `.cpp`, `.cc`, `.cxx`, `.hpp` | Defs only; refs via Pygments fallback |
 | C# | `.cs` | |
 | Chatito | `.chatito` | |
+| COBOL | `.cbl`, `.cob`, `.cpy` | Experimental tags query |
 | Clojure | `.clj`, `.cljs` | |
 | Common Lisp | `.lisp`, `.cl` | |
 | D | `.d` | |
