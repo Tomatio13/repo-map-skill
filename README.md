@@ -12,6 +12,7 @@
 </p>
 
 <p align="center">
+  <a href="README.ja.md"><img src="https://img.shields.io/badge/document-日本語-white.svg" alt="JA doc"></a>
   <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
 </p>
 

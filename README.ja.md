@@ -12,7 +12,8 @@
 </p>
 
 <p align="center">
-  <a href="README.ja.md"><img src="https://img.shields.io/badge/ドキュメント-日本語-white.svg" alt="JA doc"></a>
+  <a href="README.ja.md"><img src="https://img.shields.io/badge/document-日本語-white.svg" alt="JA doc"></a>
+  <a href="README.md"><img src="https://img.shields.io/badge/document-English-white.svg" alt="EN doc"></a>
 </p>
 
 `repo-map` は tree-sitter の AST 解析と PageRank を使って repository 全体をランキング付きで俯瞰し、次にどのファイルを読むべきかを決めるスキルです。初回探索、広い影響範囲の調査、リファクタ前の候補絞り込み、agent handoff 用の圧縮コンテキスト作成に向いています。
