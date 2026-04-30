@@ -318,7 +318,7 @@ def parse_map_section(section, rank):
             candidate = body_line.split("│", 1)[1].strip()
         else:
             candidate = stripped
-        if candidate in {"...⋮...", "..."}:
+        if candidate in {"", "...⋮...", "..."}:
             continue
         score = score_key_symbol_candidate(candidate)
         if best_score is None or score > best_score:
@@ -338,6 +338,14 @@ def parse_map_section(section, rank):
 
 def score_key_symbol_candidate(candidate):
     score = 0
+    if candidate.startswith("#"):
+        score += 20
+    if candidate.startswith("!["):
+        score -= 10
+    if candidate.startswith("- "):
+        score -= 4
+    if candidate.startswith("* "):
+        score -= 4
     if candidate.startswith("PROGRAM-ID."):
         score -= 10
     if candidate.startswith("COPY "):

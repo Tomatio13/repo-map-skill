@@ -11,6 +11,7 @@ ranked overview of a codebase's structure and symbols.
 
 import math
 import os
+import re
 import shutil
 import sqlite3
 import sys
@@ -51,6 +52,30 @@ LANGUAGE_EXTENSION_FALLBACKS = {
     ".cob": "cobol",
     ".cpy": "cobol",
 }
+
+
+def normalize_ident_for_match(value):
+    return value.casefold().strip()
+
+
+def ident_matches_mentioned_idents(ident, mentioned_idents):
+    normalized_ident = normalize_ident_for_match(ident)
+    ident_tokens = {
+        normalize_ident_for_match(token)
+        for token in re.findall(r"[\w-]+", ident, flags=re.UNICODE)
+    }
+
+    for mentioned in mentioned_idents:
+        normalized_mentioned = normalize_ident_for_match(mentioned)
+        if not normalized_mentioned:
+            continue
+        if normalized_ident == normalized_mentioned:
+            return True
+        if normalized_mentioned in ident_tokens:
+            return True
+        if normalized_mentioned in normalized_ident and not ident_tokens:
+            return True
+    return False
 
 
 class SimpleIO:
@@ -544,12 +569,17 @@ class RepoMap:
                 # Add personalization *once* if any path component matches a mentioned ident
                 current_pers += personalize
 
-            if current_pers > 0:
-                personalization[rel_fname] = current_pers  # Assign the final calculated value
-
             tags = list(self.get_tags(fname, rel_fname))
             if tags is None:
                 continue
+
+            if mentioned_idents and any(
+                ident_matches_mentioned_idents(tag.name, mentioned_idents) for tag in tags
+            ):
+                current_pers += personalize
+
+            if current_pers > 0:
+                personalization[rel_fname] = current_pers  # Assign the final calculated value
 
             for tag in tags:
                 if tag.kind == "def":
@@ -585,7 +615,7 @@ class RepoMap:
             is_snake = ("_" in ident) and any(c.isalpha() for c in ident)
             is_kebab = ("-" in ident) and any(c.isalpha() for c in ident)
             is_camel = any(c.isupper() for c in ident) and any(c.islower() for c in ident)
-            if ident in mentioned_idents:
+            if ident in mentioned_idents or ident_matches_mentioned_idents(ident, mentioned_idents):
                 mul *= 10
             if (is_snake or is_kebab or is_camel) and len(ident) >= 8:
                 mul *= 10

@@ -328,6 +328,20 @@ class RepoMapCliTests(unittest.TestCase):
 
         self.assertEqual(rows[0]["key_symbol"], "0001-OPEN-FILES.")
 
+    def test_build_view_rows_prefers_markdown_heading_over_image_line(self):
+        rows = build_view_rows(
+            (
+                "notes.md [lines 10, 13, 22]:\n"
+                "...⋮...\n"
+                "  8│![bg cover](https://example.com/a.png)\n"
+                " 10│# Building effective agents\n"
+                " 22│# 1. Prompt Chain\n"
+            ),
+            1,
+        )
+
+        self.assertEqual(rows[0]["key_symbol"], "# Building effective agents")
+
     def test_write_and_load_map_file_round_trip(self):
         with tempfile.TemporaryDirectory() as repo_dir:
             map_path = resolve_map_output_path(repo_dir, "")
@@ -584,6 +598,26 @@ class RepoMapTagExtractionTests(unittest.TestCase):
             ],
         )
 
+    def test_get_tags_raw_extracts_markdown_headings_and_references(self):
+        markdown_path = os.path.join(self.tempdir.name, "README.md")
+        with open(markdown_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                "# Title\n\n"
+                "Subtitle\n"
+                "--------\n\n"
+                "Text [ref][]\n\n"
+                "[ref]: https://example.com\n\n"
+                "```python\nprint(1)\n```\n"
+            )
+
+        tags = list(self.repo_map.get_tags_raw(markdown_path, "README.md"))
+        names_and_kinds = [(tag.name, tag.kind) for tag in tags]
+
+        self.assertIn(("Title", "def"), names_and_kinds)
+        self.assertIn(("Subtitle", "def"), names_and_kinds)
+        self.assertIn(("[ref]", "ref"), names_and_kinds)
+        self.assertIn(("python", "ref"), names_and_kinds)
+
     def test_format_span_summary_merges_and_formats_ranges(self):
         summary = self.repo_map.format_span_summary([(0, 1), (3, 4), (4, 6), (-1, -1)])
 
@@ -713,6 +747,60 @@ class RepoMapTagExtractionTests(unittest.TestCase):
             )
 
         self.assertGreater(self.repo_map.file_rank_scores["a.py"], self.repo_map.file_rank_scores["b.py"])
+
+    def test_get_ranked_tags_boosts_markdown_heading_token_matches_for_mentioned_idents(self):
+        class FakeMultiDiGraph:
+            def __init__(self):
+                self.nodes = set()
+                self._out_edges = defaultdict(list)
+
+            def add_edge(self, src, dst, **data):
+                self.nodes.add(src)
+                self.nodes.add(dst)
+                self._out_edges[src].append((src, dst, data))
+
+            def out_edges(self, src, data=True):
+                return list(self._out_edges.get(src, []))
+
+        fake_networkx = SimpleNamespace(
+            MultiDiGraph=FakeMultiDiGraph,
+            pagerank=lambda graph, weight="weight", **kwargs: {
+                node: kwargs.get("personalization", {}).get(node, 1.0)
+                for node in sorted(graph.nodes)
+            },
+        )
+
+        a_path = os.path.join(self.tempdir.name, "a.md")
+        z_path = os.path.join(self.tempdir.name, "z.md")
+        for path in (a_path, z_path):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("placeholder\n")
+
+        def fake_get_tags(fname, rel_fname):
+            if rel_fname == "a.md":
+                return [
+                    Tag("a.md", a_path, 0, 0, "Other Topic", "def"),
+                    Tag("a.md", a_path, 0, 0, "Other Topic", "ref"),
+                ]
+            if rel_fname == "z.md":
+                return [
+                    Tag("z.md", z_path, 0, 0, "Agent Skills", "def"),
+                    Tag("z.md", z_path, 0, 0, "Agent Skills", "ref"),
+                ]
+            return []
+
+        with (
+            mock.patch.object(self.repo_map, "get_tags", side_effect=fake_get_tags),
+            mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
+        ):
+            ranked_tags = self.repo_map.get_ranked_tags(
+                chat_fnames=set(),
+                other_fnames=[a_path, z_path],
+                mentioned_fnames=set(),
+                mentioned_idents={"Agent"},
+            )
+
+        self.assertEqual([tag[0] for tag in ranked_tags[:2]], ["z.md", "a.md"])
 
 
 if __name__ == "__main__":
