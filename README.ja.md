@@ -54,6 +54,14 @@ agent がやること:
 - 保存済み map はあるが更新したい: `update`
 - 次に読む file や symbol がすでに分かっている: この skill を使わない
 
+推奨優先順位:
+
+- 保存済み state がありそうなら、まず `status`
+- state が無ければ `init`
+- `status` が stale を返したら `update`
+- 上位だけ見たいなら `status -> view`
+- `generate` は one-shot / debug 用だけに使う
+
 ## 期待する出力
 
 生成した map を見た後は、必ず次の形式で要約します。
@@ -65,6 +73,7 @@ repo-map result:
 - why relevant
 - confidence
 - next read commands
+- read budget
 ```
 
 各項目の意味:
@@ -74,6 +83,7 @@ repo-map result:
 - `why relevant`: 今の依頼との関係を短く説明
 - `confidence`: `high` `medium` `low`
 - `next read commands`: 具体的な `rg` `sed` `Read` 系コマンド
+- `read budget`: 次に読む範囲の上限。例: `まず上位3ファイル、合計400行まで`
 
 ## 基本フロー
 
@@ -90,21 +100,21 @@ repo-map result:
 
 ```bash
 # 依存インストール
-python -m venv .venv
-source .venv/bin/activate
-pip install -r scripts/requirements.txt
+if [ ! -d .venv ]; then python -m venv .venv; fi
+if [ ! -x .venv/bin/python ]; then echo "missing .venv/bin/python" >&2; exit 1; fi
+.venv/bin/pip install -r scripts/requirements.txt
 
 # 最初の保存済み map を作る
-python scripts/generate_repomap.py init --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py init --repo-path /path/to/repo
 
 # stale かどうか確認する
-python scripts/generate_repomap.py status --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo
 
 # 保存済み map を更新する
-python scripts/generate_repomap.py update --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py update --repo-path /path/to/repo
 
 # 上位ファイルだけを見る
-python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
+.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
 ```
 
 ## CLI コマンドガイド
@@ -135,6 +145,8 @@ python scripts/generate_repomap.py update --repo-path /path/to/repo
 1. `status` を見る
 2. stale なら `update` する
 3. `view` で上位を見る
+
+ローカルLLMでは、`update -> full map` より `status -> view` を優先した方が token 効率が良いです。
 
 ### `status`
 
@@ -213,10 +225,18 @@ python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
 - `--map-tokens`: 出力トークン予算。デフォルト `1024`
 - `--no-cache`: キャッシュを使わず常に再計算
 - `--show-ranks`: 生の repo-map 出力に ranking score を表示
+- `--output-json`: agent 連携向けの machine-readable JSON を返す
 - `--verbose`: 進捗とデバッグ情報を stderr に出す
 - `--state-file`: 保存 state のカスタムパス
 - `--map-file`: 保存 map のカスタムパス
 - `--top-files`: `view` の表示件数。デフォルト `5`
+
+JSON を使いたい時の例:
+
+```bash
+.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo --output-json
+.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5 --output-json
+```
 
 ## 仕組み
 

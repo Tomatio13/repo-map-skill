@@ -191,6 +191,10 @@ def load_map_file(map_path):
         return handle.read()
 
 
+def print_json(payload):
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+
+
 def split_map_sections(map_text):
     if not map_text:
         return []
@@ -394,6 +398,19 @@ def format_status_report(state_path, repo_path, state, stale, reason, current_fi
     )
 
 
+def build_status_payload(state_path, repo_path, state, stale, reason, current_files):
+    return {
+        "command": "status",
+        "state_file": state_path,
+        "repo_path": repo_path,
+        "generated_at": state.get("generated_at", "missing") if state else "missing",
+        "tracked_files": state.get("tracked_file_count", 0) if state else 0,
+        "current_files": len(current_files),
+        "stale": stale,
+        "reason": reason,
+    }
+
+
 def format_view_report(map_path, top_files, map_text):
     if map_text is None:
         return None
@@ -414,6 +431,29 @@ def format_view_report(map_path, top_files, map_text):
             table,
         ]
     ).rstrip()
+
+
+def build_view_payload(map_path, top_files, map_text):
+    return {
+        "command": "view",
+        "map_file": map_path,
+        "top_files": top_files,
+        "rows": build_view_rows(map_text, top_files),
+    }
+
+
+def build_map_payload(command, repo_path, map_tokens, state_path, map_path, result, state_written, top_files):
+    return {
+        "command": command,
+        "repo_path": repo_path,
+        "map_tokens": map_tokens,
+        "state_written": state_written,
+        "state_file": state_path if state_written else None,
+        "map_file": map_path if state_written else None,
+        "top_files": top_files,
+        "rows": build_view_rows(result, top_files),
+        "raw_map": result,
+    }
 
 
 def parse_args():
@@ -527,6 +567,11 @@ Examples:
         default=5,
         help="For view mode, show only the top N file sections from the saved map. Default is 5.",
     )
+    parser.add_argument(
+        "--output-json",
+        action="store_true",
+        help="Print machine-readable JSON instead of text output.",
+    )
     return parser.parse_args()
 
 
@@ -568,7 +613,11 @@ def main():
             mentioned_fnames,
             mentioned_idents,
         )
-        print(format_status_report(state_path, repo_path, state, stale, reason, other_files))
+        status_payload = build_status_payload(state_path, repo_path, state, stale, reason, other_files)
+        if args.output_json:
+            print_json(status_payload)
+        else:
+            print(format_status_report(state_path, repo_path, state, stale, reason, other_files))
         sys.exit(1 if stale else 0)
 
     if args.command == "view":
@@ -577,7 +626,10 @@ def main():
             print(f"Error: No saved repo map found at {map_path}", file=sys.stderr)
             sys.exit(1)
 
-        print(format_view_report(map_path, args.top_files, map_text))
+        if args.output_json:
+            print_json(build_view_payload(map_path, args.top_files, map_text))
+        else:
+            print(format_view_report(map_path, args.top_files, map_text))
         return
 
     if not other_files:
@@ -603,7 +655,6 @@ def main():
     )
 
     if result:
-        print(result)
         should_write_state = args.write_state or args.command in {"init", "update"}
         if should_write_state:
             payload = build_state_payload(
@@ -619,6 +670,21 @@ def main():
             )
             write_state_file(state_path, payload)
             write_map_file(map_path, result)
+        if args.output_json:
+            print_json(
+                build_map_payload(
+                    command=args.command,
+                    repo_path=repo_path,
+                    map_tokens=args.map_tokens,
+                    state_path=state_path,
+                    map_path=map_path,
+                    result=result,
+                    state_written=should_write_state,
+                    top_files=args.top_files,
+                )
+            )
+        else:
+            print(result)
     else:
         print("No repo map generated (no files matched or token budget too small).", file=sys.stderr)
         sys.exit(1)

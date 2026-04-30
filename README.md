@@ -54,6 +54,14 @@ What the agent should do:
 - Use `update` when the saved map exists but should be refreshed
 - Skip the skill when the next file or symbol is already known
 
+Default choice:
+
+- Use `status` when saved state may already exist
+- Use `init` when no saved state exists
+- Use `update` when `status` reports stale
+- Use `view` after `status` when only the top files are needed
+- Use `generate` only for one-shot or debug use
+
 ## Expected Agent Output
 
 After reviewing a generated map, summarize it in this exact format:
@@ -65,6 +73,7 @@ repo-map result:
 - why relevant
 - confidence
 - next read commands
+- read budget
 ```
 
 Field guidance:
@@ -74,6 +83,7 @@ Field guidance:
 - `why relevant`: A short reason tied to the current request
 - `confidence`: `high`, `medium`, or `low`
 - `next read commands`: Concrete `rg`, `sed`, or file-read commands
+- `read budget`: A bounded next-read plan, for example `inspect top 3 files first, max 400 lines total`
 
 ## Agent Workflow
 
@@ -90,21 +100,20 @@ Use `generate` only as a backward-compatible direct mode when you do not want pe
 
 ```bash
 # Install dependencies
-python -m venv .venv
-source .venv/bin/activate
-pip install -r scripts/requirements.txt
+if [ ! -d .venv ]; then python -m venv .venv; fi
+.venv/bin/pip install -r scripts/requirements.txt
 
 # Create the first saved map
-python scripts/generate_repomap.py init --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py init --repo-path /path/to/repo
 
 # Check whether the saved map is still fresh
-python scripts/generate_repomap.py status --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo
 
 # Refresh the saved map
-python scripts/generate_repomap.py update --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py update --repo-path /path/to/repo
 
 # See only the top ranked files
-python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
+.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
 ```
 
 ## CLI Command Guide
@@ -135,6 +144,8 @@ Typical use:
 1. Run `status`
 2. If stale, run `update`
 3. Run `view`
+
+For local LLMs, prefer `status -> view` over `update -> full map` when you only need the top files.
 
 ### `status`
 
@@ -213,10 +224,18 @@ python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
 - `--map-tokens`: maximum output token budget, default `1024`
 - `--no-cache`: disable cache and always recompute
 - `--show-ranks`: show ranking scores in the raw repo-map output
+- `--output-json`: return machine-readable JSON for agent integration
 - `--verbose`: print progress and debug information to stderr
 - `--state-file`: custom saved state path
 - `--map-file`: custom saved map path
 - `--top-files`: number of rows to show in `view`, default `5`
+
+Example JSON usage:
+
+```bash
+.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo --output-json
+.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5 --output-json
+```
 
 ## How It Works
 

@@ -4,12 +4,16 @@ import tempfile
 import unittest
 from collections import defaultdict
 from io import StringIO
+import json
 from types import SimpleNamespace
 from unittest import mock
 
 from scripts.generate_repomap import (
+    build_map_payload,
     build_state_payload,
+    build_status_payload,
     build_view_rows,
+    build_view_payload,
     discover_files,
     evaluate_staleness,
     format_status_report,
@@ -131,6 +135,16 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertEqual(args.command, "view")
         self.assertEqual(args.top_files, 3)
 
+    def test_parse_args_supports_output_json(self):
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["generate_repomap.py", "status", "--repo-path", "/tmp/example-repo", "--output-json"],
+        ):
+            args = parse_args()
+
+        self.assertTrue(args.output_json)
+
     def test_resolve_state_path_defaults_under_repo(self):
         state_path = resolve_state_path("/tmp/example-repo", "")
 
@@ -243,6 +257,20 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertIn("- stale: yes", report)
         self.assertIn("- reason: tracked_files_changed", report)
 
+    def test_build_status_payload_includes_staleness(self):
+        payload = build_status_payload(
+            state_path="/tmp/example-repo/.repomap/state.json",
+            repo_path="/tmp/example-repo",
+            state={"generated_at": "2026-04-30T00:00:00+00:00", "tracked_file_count": 3},
+            stale=True,
+            reason="tracked_files_changed",
+            current_files=["a.py", "b.py"],
+        )
+
+        self.assertEqual(payload["command"], "status")
+        self.assertTrue(payload["stale"])
+        self.assertEqual(payload["reason"], "tracked_files_changed")
+
     def test_select_top_map_sections_limits_output(self):
         map_text = "\n\n".join(
             [
@@ -302,6 +330,34 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertIn("a.py", report)
         self.assertNotIn("b.py [lines 3-4]", report)
 
+    def test_build_view_payload_includes_rows(self):
+        payload = build_view_payload(
+            map_path="/tmp/example-repo/.repomap/latest_map.txt",
+            top_files=1,
+            map_text="a.py [lines 1-2]:\n1│def alpha():\n\nb.py [lines 3-4]:\n3│def beta():",
+        )
+
+        self.assertEqual(payload["command"], "view")
+        self.assertEqual(payload["top_files"], 1)
+        self.assertEqual(payload["rows"][0]["file"], "a.py")
+
+    def test_build_map_payload_includes_rows_and_raw_map(self):
+        payload = build_map_payload(
+            command="generate",
+            repo_path="/tmp/example-repo",
+            map_tokens=1024,
+            state_path="/tmp/example-repo/.repomap/state.json",
+            map_path="/tmp/example-repo/.repomap/latest_map.txt",
+            result="a.py [lines 1-2]:\n1│def alpha():",
+            state_written=True,
+            top_files=5,
+        )
+
+        self.assertEqual(payload["command"], "generate")
+        self.assertTrue(payload["state_written"])
+        self.assertEqual(payload["rows"][0]["file"], "a.py")
+        self.assertIn("a.py", payload["raw_map"])
+
     def test_main_status_returns_zero_when_state_is_fresh(self):
         with tempfile.TemporaryDirectory() as repo_dir:
             source = os.path.join(repo_dir, "src.py")
@@ -337,6 +393,40 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertEqual(exit_info.exception.code, 0)
         self.assertIn("- stale: no", stdout.getvalue())
 
+    def test_main_status_outputs_json_when_requested(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            from scripts import generate_repomap as cli
+
+            state_path = resolve_state_path(repo_dir, "")
+            payload = build_state_payload(
+                repo_path=repo_dir,
+                state_path=state_path,
+                command="init",
+                map_tokens=1024,
+                chat_files=set(),
+                other_files={source},
+                exclude_globs=[],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+            write_state_file(state_path, payload)
+
+            stdout = StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["generate_repomap.py", "status", "--repo-path", repo_dir, "--output-json"]),
+                mock.patch("sys.stdout", stdout),
+            ):
+                with self.assertRaises(SystemExit):
+                    cli.main()
+
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["command"], "status")
+        self.assertFalse(parsed["stale"])
+
     def test_main_view_prints_saved_top_files(self):
         with tempfile.TemporaryDirectory() as repo_dir:
             from scripts import generate_repomap as cli
@@ -359,6 +449,61 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertIn("repo-map view:", stdout.getvalue())
         self.assertIn("a.py", stdout.getvalue())
         self.assertNotIn("b.py [lines 3-4]", stdout.getvalue())
+
+    def test_main_view_outputs_json_when_requested(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            from scripts import generate_repomap as cli
+
+            map_path = resolve_map_output_path(repo_dir, "")
+            write_map_file(
+                map_path,
+                "a.py [lines 1-2]:\n1│def alpha():\n\nb.py [lines 3-4]:\n3│def beta():\n",
+            )
+
+            stdout = StringIO()
+            with (
+                mock.patch.object(sys, "argv", ["generate_repomap.py", "view", "--repo-path", repo_dir, "--top-files", "1", "--output-json"]),
+                mock.patch("sys.stdout", stdout),
+            ):
+                cli.main()
+
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["command"], "view")
+        self.assertEqual(parsed["rows"][0]["file"], "a.py")
+
+    def test_main_generate_outputs_json_when_requested(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            from scripts import generate_repomap as cli
+
+            class FakeRepoMap:
+                def __init__(self, **kwargs):
+                    self.kwargs = kwargs
+
+                def get_repo_map(self, **kwargs):
+                    return "a.py [lines 1-2]:\n1│def alpha():\n"
+
+            fake_repomap_core = SimpleNamespace(RepoMap=FakeRepoMap)
+
+            stdout = StringIO()
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["generate_repomap.py", "--repo-path", repo_dir, "--output-json"],
+                ),
+                mock.patch("sys.stdout", stdout),
+                mock.patch.dict(sys.modules, {"repomap_core": fake_repomap_core}),
+            ):
+                cli.main()
+
+        parsed = json.loads(stdout.getvalue())
+        self.assertEqual(parsed["command"], "generate")
+        self.assertFalse(parsed["state_written"])
+        self.assertEqual(parsed["rows"][0]["file"], "a.py")
 
 
 @unittest.skipIf(REPOMAP_CORE_IMPORT_ERROR is not None, f"repomap_core deps unavailable: {REPOMAP_CORE_IMPORT_ERROR}")

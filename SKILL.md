@@ -49,19 +49,27 @@ refactoring, or agent handoff.
 ## Quick Start
 
 MUST:
-1. Run `python -m venv .venv`
-2. Run `pip install -r scripts/requirements.txt`
+1. If `.venv` does not exist, run `python -m venv .venv`
+2. If dependencies are not installed, run `.venv/bin/pip install -r scripts/requirements.txt`
 3. Start with one of these commands:
-   - `python scripts/generate_repomap.py init --repo-path /path/to/repo`
-   - `python scripts/generate_repomap.py update --repo-path /path/to/repo`
-   - `python scripts/generate_repomap.py status --repo-path /path/to/repo`
-   - `python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5`
+   - `.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo`
+   - `.venv/bin/python scripts/generate_repomap.py init --repo-path /path/to/repo`
+   - `.venv/bin/python scripts/generate_repomap.py update --repo-path /path/to/repo`
+   - `.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5`
 4. Use the ranked output to choose the next files to inspect
 
 Path arguments accept absolute paths or paths relative to `--repo-path`.
 `--mentioned-fnames` is normalized as a repo-relative path.
 
 ## Operation Modes
+
+Default choice:
+
+- Use `status` when saved state may already exist
+- Use `init` when no saved state exists
+- Use `update` when `status` reports stale
+- Use `view` after `status` when you only need the top files
+- Use `generate` only for one-shot or debug use
 
 - `init`
   - Use when there is no saved repo map yet, or you want an explicit first snapshot
@@ -84,11 +92,11 @@ Path arguments accept absolute paths or paths relative to `--repo-path`.
 Examples:
 
 ```bash
-python scripts/generate_repomap.py init --repo-path /path/to/repo
-python scripts/generate_repomap.py update --repo-path /path/to/repo
-python scripts/generate_repomap.py status --repo-path /path/to/repo
-python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
-python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
+.venv/bin/python scripts/generate_repomap.py status --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py init --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py update --repo-path /path/to/repo
+.venv/bin/python scripts/generate_repomap.py view --repo-path /path/to/repo --top-files 5
+.venv/bin/python scripts/generate_repomap.py --repo-path /path/to/repo --map-tokens 2048
 ```
 
 `init`, `update`, and `generate` output a ranked tree of the codebase to stdout:
@@ -122,6 +130,7 @@ For "where is this logic?" style requests:
 - If the area is unclear and no saved map exists, use `init`
 - If the area is unclear and a saved map exists, use `status` first, then `update` if stale
 - If you only want to re-check the top-ranked files from the saved map, use `view`
+- For local LLMs, prefer `status -> view` over `update -> full map`
 - If you know rough terms, use `--mentioned-idents`
 - If you already know the file or symbol name, skip the map and use search or direct reads
 
@@ -157,6 +166,7 @@ python scripts/generate_repomap.py --repo-path ./my-project \
 - `--map-tokens`: Max token budget for the map output, default `1024`
 - `--no-cache`: Disable caching and always recompute
 - `--show-ranks`: Include each file's ranking score in the header
+- `--output-json`: Return machine-readable JSON for agent integration
 - `--verbose`: Show progress and debug info on stderr
 
 ## How It Works
@@ -195,6 +205,7 @@ repo-map result:
 - why relevant
 - confidence
 - next read commands
+- read budget
 ```
 
 Populate the fields as follows:
@@ -203,6 +214,7 @@ Populate the fields as follows:
 - `why relevant`: A short reason tied to the user's request
 - `confidence`: `high`, `medium`, or `low`
 - `next read commands`: Concrete `rg`, `sed`, or file-read commands for the next step
+- `read budget`: A bounded next-read plan, for example `inspect top 3 files first, max 400 lines total`
 
 Do not replace this template with a free-form summary.
 
