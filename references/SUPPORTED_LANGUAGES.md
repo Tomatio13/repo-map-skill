@@ -28,6 +28,7 @@ Check this list before assuming parser support for an unfamiliar repository.
 | Julia | `.jl` | |
 | Kotlin | `.kt`, `.kts` | |
 | Lua | `.lua` | |
+| Markdown | `.md`, `.markdown` | Headings, reference links, and fenced code info strings |
 | MATLAB | `.m` | |
 | OCaml | `.ml`, `.mli` | |
 | PHP | `.php` | |

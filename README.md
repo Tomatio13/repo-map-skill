@@ -284,7 +284,7 @@ repo-map/
 
 ## Supported Languages
 
-Arduino, C, C++, C#, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, MATLAB, OCaml, PHP, Pony, Python, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, Zig.
+Arduino, C, C++, C#, Chatito, COBOL, Clojure, Common Lisp, D, Dart, Elixir, Elm, Emacs Lisp, Fortran, Gleam, Go, Haskell, HCL (Terraform), Java, JavaScript, Julia, Kotlin, Lua, Markdown, MATLAB, OCaml, PHP, Pony, Properties, Python, QL, R, Racket, Ruby, Rust, Scala, Solidity, Swift, TypeScript, TSX, udev, Zig.
 
 See [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) for details.
 
