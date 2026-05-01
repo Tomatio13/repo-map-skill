@@ -1,6 +1,8 @@
 __pycache__/
 *.pyc
 .venv/
-.repomap.cache.v5/
+.repomap.cache.*/
 .codex
 .serena/
+.repomap
+.firecrawl/
