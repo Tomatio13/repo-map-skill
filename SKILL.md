@@ -74,9 +74,11 @@ Default choice:
 - `init`
   - Use when there is no saved repo map yet, or you want an explicit first snapshot
   - Generates the map and writes `.repomap/state.json`
+  - Enables `--symbol-kinds` and `--show-deps` behavior by default for richer saved maps
 - `update`
   - Use when a saved repo map exists and you want to refresh it
   - Regenerates the map and overwrites `.repomap/state.json`
+  - Enables `--symbol-kinds` and `--show-deps` behavior by default for richer saved maps
 - `status`
   - Use when you only need freshness information
   - Does not regenerate the map
@@ -141,7 +143,8 @@ python scripts/generate_repomap.py --repo-path ./my-project \
     --map-tokens 2048 \
     --mentioned-idents "auth,login,validate_token" \
     --exclude-glob "**/*.min.js,dist/*" \
-    --show-ranks
+    --show-ranks \
+    --symbol-kinds
 ```
 
 ## Parameters
@@ -166,18 +169,26 @@ python scripts/generate_repomap.py --repo-path ./my-project \
 - `--map-tokens`: Max token budget for the map output, default `1024`
 - `--no-cache`: Disable caching and always recompute
 - `--show-ranks`: Include each file's ranking score in the header
+- `--symbol-kinds`: Annotate rendered lines with symbol kinds such as `[fn]`, `[class]`, or `[method]`
+- `--show-deps`: Include optional `deps`, `related`, and `used by` metadata in generated map sections
 - `--output-json`: Return machine-readable JSON for agent integration
 - `--verbose`: Show progress and debug info on stderr
+
+For `init` and `update`, `--symbol-kinds` and `--show-deps` are effectively on by default so that saved maps are richer for later `view` use.
+For `generate`, both remain opt-in.
 
 ## How It Works
 
 1. **Parse**: Uses tree-sitter to extract class, function, and method definitions and references from each source file
 2. **Rank**: Builds a dependency graph between files and runs PageRank to identify the most important symbols
 3. **Render**: Fits the ranked results into the token budget using binary search, showing relevant code lines
+4. **Optional metadata**: When enabled, adds symbol-kind annotations and dependency-style metadata to generated map sections
 
 Files mentioned via `--mentioned-fnames` or `--mentioned-idents` receive a 10x ranking boost.
 Chat files are excluded from the output (assumed to already be in context).
 `--exclude-glob` is matched against repo-relative paths during auto-discovery.
+`deps` is import-based and only appears when `--show-deps` is enabled.
+`related` and `used by` are repo-internal relationships derived from identifier sharing and references, not a full import graph.
 
 ## Output Format
 
@@ -192,8 +203,20 @@ other_file.py [lines 33-35]:
 33│def function_name(param):
 ```
 
+Optional generated-map metadata may appear between the header and body when `--show-deps` is enabled:
+
+```text
+filename.py [lines 12-20]:
+  deps: os, sys
+  related: other_file.py
+  used by: caller.py (3 refs)
+12│class ClassName: [class]
+13│    def method_name(self, args):
+```
+
 Header `lines` use 1-based focus-line ranges. They are not guaranteed to be the full symbol span. Body lines also include line numbers.
 When `--show-ranks` is enabled, the score matches the file display order rather than raw node PageRank.
+When `--symbol-kinds` is enabled, line annotations such as `[fn]` or `[class]` may be appended to rendered lines.
 Lines are truncated at 100 characters. Files are ordered by importance (PageRank score), top to bottom.
 
 After generating the map, always summarize using this exact template:
@@ -248,11 +271,20 @@ python scripts/generate_repomap.py --repo-path ./my-project \
     --exclude-glob "**/*.min.js,dist/*"
 ```
 
+### Showing symbol kinds and dependencies
+
+```bash
+python scripts/generate_repomap.py --repo-path ./my-project \
+    --show-ranks \
+    --symbol-kinds \
+    --show-deps
+```
+
 ## Troubleshooting
 
 - **"No repo map generated"**: The token budget may be too small, or no source files were found. Try increasing `--map-tokens`.
 - **Too little output**: Re-run with a larger token budget or a narrower `--other-files` list.
-- **Slow first run**: The initial scan parses all files with tree-sitter. Results are cached in `.repomap.cache.v5/` for subsequent runs.
+- **Slow first run**: The initial scan parses all files with tree-sitter. Results are cached in `.repomap.cache.v7/` for subsequent runs.
 - **Unknown language**: Check [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) before assuming the parser is broken.
 - **Missing language**: Check [SUPPORTED_LANGUAGES.md](references/SUPPORTED_LANGUAGES.md) for the full list of supported languages.
 - **Install errors**: Ensure Python 3.10+ and run `pip install -r scripts/requirements.txt`.

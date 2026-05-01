@@ -22,16 +22,19 @@ from scripts.generate_repomap import (
     load_map_file,
     parse_args,
     parse_file_list,
+    parse_map_section,
     parse_mentioned_fnames,
     resolve_map_output_path,
     resolve_state_path,
+    split_map_sections,
     select_top_map_sections,
     write_map_file,
     write_state_file,
 )
 
 try:
-    from scripts.repomap_core import RepoMap, Tag
+    from scripts.repomap_core import RankResult, RepoMap, Tag
+
     REPOMAP_CORE_IMPORT_ERROR = None
 except ModuleNotFoundError as exc:
     RepoMap = None
@@ -90,7 +93,9 @@ class RepoMapCliTests(unittest.TestCase):
 
     def test_parse_mentioned_fnames_normalizes_to_repo_relative_paths(self):
         repo_dir = "/tmp/example-repo"
-        parsed = parse_mentioned_fnames(repo_dir, "src/main.py,/tmp/example-repo/lib/util.py")
+        parsed = parse_mentioned_fnames(
+            repo_dir, "src/main.py,/tmp/example-repo/lib/util.py"
+        )
 
         self.assertEqual(parsed, {"src/main.py", "lib/util.py"})
 
@@ -108,7 +113,13 @@ class RepoMapCliTests(unittest.TestCase):
         with mock.patch.object(
             sys,
             "argv",
-            ["generate_repomap.py", "--repo-path", "/tmp/example-repo", "--exclude-glob", "**/*.min.js"],
+            [
+                "generate_repomap.py",
+                "--repo-path",
+                "/tmp/example-repo",
+                "--exclude-glob",
+                "**/*.min.js",
+            ],
         ):
             args = parse_args()
 
@@ -128,7 +139,14 @@ class RepoMapCliTests(unittest.TestCase):
         with mock.patch.object(
             sys,
             "argv",
-            ["generate_repomap.py", "view", "--repo-path", "/tmp/example-repo", "--top-files", "3"],
+            [
+                "generate_repomap.py",
+                "view",
+                "--repo-path",
+                "/tmp/example-repo",
+                "--top-files",
+                "3",
+            ],
         ):
             args = parse_args()
 
@@ -139,7 +157,13 @@ class RepoMapCliTests(unittest.TestCase):
         with mock.patch.object(
             sys,
             "argv",
-            ["generate_repomap.py", "status", "--repo-path", "/tmp/example-repo", "--output-json"],
+            [
+                "generate_repomap.py",
+                "status",
+                "--repo-path",
+                "/tmp/example-repo",
+                "--output-json",
+            ],
         ):
             args = parse_args()
 
@@ -261,7 +285,10 @@ class RepoMapCliTests(unittest.TestCase):
         payload = build_status_payload(
             state_path="/tmp/example-repo/.repomap/state.json",
             repo_path="/tmp/example-repo",
-            state={"generated_at": "2026-04-30T00:00:00+00:00", "tracked_file_count": 3},
+            state={
+                "generated_at": "2026-04-30T00:00:00+00:00",
+                "tracked_file_count": 3,
+            },
             stale=True,
             reason="tracked_files_changed",
             current_files=["a.py", "b.py"],
@@ -351,6 +378,35 @@ class RepoMapCliTests(unittest.TestCase):
 
         self.assertIn("a.py", loaded)
 
+    def test_split_map_sections_splits_on_header_lines_without_blank_separators(self):
+        map_text = (
+            "a.py [lines 1-2]:\n"
+            "  deps: os\n"
+            "1│def alpha():\n"
+            "b.py [lines 3-4]:\n"
+            "  related: a.py\n"
+            "3│def beta():\n"
+        )
+
+        sections = split_map_sections(map_text)
+
+        self.assertEqual(len(sections), 2)
+        self.assertTrue(sections[0].startswith("a.py [lines 1-2]:"))
+        self.assertTrue(sections[1].startswith("b.py [lines 3-4]:"))
+
+    def test_select_top_map_sections_handles_saved_map_without_blank_lines(self):
+        map_text = (
+            "a.py [lines 1-2]:\n"
+            "1│def alpha():\n"
+            "b.py [lines 3-4]:\n"
+            "3│def beta():\n"
+        )
+
+        selected = select_top_map_sections(map_text, 1)
+
+        self.assertIn("a.py [lines 1-2]:", selected)
+        self.assertNotIn("b.py [lines 3-4]:", selected)
+
     def test_format_view_report_includes_selected_sections(self):
         report = format_view_report(
             map_path="/tmp/example-repo/.repomap/latest_map.txt",
@@ -418,7 +474,11 @@ class RepoMapCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
             with (
-                mock.patch.object(sys, "argv", ["generate_repomap.py", "status", "--repo-path", repo_dir]),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["generate_repomap.py", "status", "--repo-path", repo_dir],
+                ),
                 mock.patch("sys.stdout", stdout),
                 mock.patch("sys.stderr", stderr),
             ):
@@ -452,7 +512,17 @@ class RepoMapCliTests(unittest.TestCase):
 
             stdout = StringIO()
             with (
-                mock.patch.object(sys, "argv", ["generate_repomap.py", "status", "--repo-path", repo_dir, "--output-json"]),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "generate_repomap.py",
+                        "status",
+                        "--repo-path",
+                        repo_dir,
+                        "--output-json",
+                    ],
+                ),
                 mock.patch("sys.stdout", stdout),
             ):
                 with self.assertRaises(SystemExit):
@@ -475,7 +545,18 @@ class RepoMapCliTests(unittest.TestCase):
             stdout = StringIO()
             stderr = StringIO()
             with (
-                mock.patch.object(sys, "argv", ["generate_repomap.py", "view", "--repo-path", repo_dir, "--top-files", "1"]),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "generate_repomap.py",
+                        "view",
+                        "--repo-path",
+                        repo_dir,
+                        "--top-files",
+                        "1",
+                    ],
+                ),
                 mock.patch("sys.stdout", stdout),
                 mock.patch("sys.stderr", stderr),
             ):
@@ -497,7 +578,19 @@ class RepoMapCliTests(unittest.TestCase):
 
             stdout = StringIO()
             with (
-                mock.patch.object(sys, "argv", ["generate_repomap.py", "view", "--repo-path", repo_dir, "--top-files", "1", "--output-json"]),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "generate_repomap.py",
+                        "view",
+                        "--repo-path",
+                        repo_dir,
+                        "--top-files",
+                        "1",
+                        "--output-json",
+                    ],
+                ),
                 mock.patch("sys.stdout", stdout),
             ):
                 cli.main()
@@ -540,8 +633,107 @@ class RepoMapCliTests(unittest.TestCase):
         self.assertFalse(parsed["state_written"])
         self.assertEqual(parsed["rows"][0]["file"], "a.py")
 
+    def test_main_generate_keeps_symbol_kinds_and_deps_opt_in(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
 
-@unittest.skipIf(REPOMAP_CORE_IMPORT_ERROR is not None, f"repomap_core deps unavailable: {REPOMAP_CORE_IMPORT_ERROR}")
+            from scripts import generate_repomap as cli
+
+            class FakeRepoMap:
+                last_kwargs = None
+
+                def __init__(self, **kwargs):
+                    FakeRepoMap.last_kwargs = kwargs
+
+                def get_repo_map(self, **kwargs):
+                    return "a.py [lines 1-2]:\n1│def alpha():\n"
+
+            fake_repomap_core = SimpleNamespace(RepoMap=FakeRepoMap)
+
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["generate_repomap.py", "--repo-path", repo_dir],
+                ),
+                mock.patch.dict(sys.modules, {"repomap_core": fake_repomap_core}),
+            ):
+                cli.main()
+
+        self.assertFalse(FakeRepoMap.last_kwargs["show_symbol_kinds"])
+        self.assertFalse(FakeRepoMap.last_kwargs["show_deps"])
+
+    def test_main_init_enables_symbol_kinds_and_deps_by_default(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            from scripts import generate_repomap as cli
+
+            class FakeRepoMap:
+                last_kwargs = None
+
+                def __init__(self, **kwargs):
+                    FakeRepoMap.last_kwargs = kwargs
+
+                def get_repo_map(self, **kwargs):
+                    return "a.py [lines 1-2]:\n1│def alpha():\n"
+
+            fake_repomap_core = SimpleNamespace(RepoMap=FakeRepoMap)
+
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["generate_repomap.py", "init", "--repo-path", repo_dir],
+                ),
+                mock.patch.dict(sys.modules, {"repomap_core": fake_repomap_core}),
+            ):
+                cli.main()
+
+        self.assertTrue(FakeRepoMap.last_kwargs["show_symbol_kinds"])
+        self.assertTrue(FakeRepoMap.last_kwargs["show_deps"])
+
+    def test_main_update_enables_symbol_kinds_and_deps_by_default(self):
+        with tempfile.TemporaryDirectory() as repo_dir:
+            source = os.path.join(repo_dir, "src.py")
+            with open(source, "w", encoding="utf-8") as handle:
+                handle.write("print('ok')\n")
+
+            from scripts import generate_repomap as cli
+
+            class FakeRepoMap:
+                last_kwargs = None
+
+                def __init__(self, **kwargs):
+                    FakeRepoMap.last_kwargs = kwargs
+
+                def get_repo_map(self, **kwargs):
+                    return "a.py [lines 1-2]:\n1│def alpha():\n"
+
+            fake_repomap_core = SimpleNamespace(RepoMap=FakeRepoMap)
+
+            with (
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    ["generate_repomap.py", "update", "--repo-path", repo_dir],
+                ),
+                mock.patch.dict(sys.modules, {"repomap_core": fake_repomap_core}),
+            ):
+                cli.main()
+
+        self.assertTrue(FakeRepoMap.last_kwargs["show_symbol_kinds"])
+        self.assertTrue(FakeRepoMap.last_kwargs["show_deps"])
+
+
+@unittest.skipIf(
+    REPOMAP_CORE_IMPORT_ERROR is not None,
+    f"repomap_core deps unavailable: {REPOMAP_CORE_IMPORT_ERROR}",
+)
 class RepoMapTagExtractionTests(unittest.TestCase):
     def setUp(self):
         self.tempdir = tempfile.TemporaryDirectory()
@@ -555,17 +747,25 @@ class RepoMapTagExtractionTests(unittest.TestCase):
 
     def _run_get_tags_raw(self, using_tsl_pack):
         captures = {
-            "name.definition.function": [FakeNode("alpha", 0, 1), FakeNode("beta", 3, 4)],
+            "name.definition.function": [
+                FakeNode("alpha", 0, 1),
+                FakeNode("beta", 3, 4),
+            ],
             "name.reference.call": [FakeNode("gamma", 6), FakeNode("delta", 8)],
         }
-        fake_parser = SimpleNamespace(parse=lambda _: SimpleNamespace(root_node=object()))
+        fake_parser = SimpleNamespace(
+            parse=lambda _: SimpleNamespace(root_node=object())
+        )
 
         with (
             mock.patch("scripts.repomap_core.filename_to_lang", return_value="python"),
             mock.patch("scripts.repomap_core.get_language", return_value=object()),
             mock.patch("scripts.repomap_core.get_parser", return_value=fake_parser),
             mock.patch("scripts.repomap_core.Query", return_value=object()),
-            mock.patch("scripts.repomap_core.get_scm_fname", return_value=SimpleNamespace(exists=lambda: True, read_text=lambda: "")),
+            mock.patch(
+                "scripts.repomap_core.get_scm_fname",
+                return_value=SimpleNamespace(exists=lambda: True, read_text=lambda: ""),
+            ),
             mock.patch.object(self.repo_map.io, "read_text", return_value="code"),
             mock.patch.object(self.repo_map, "_run_captures", return_value=captures),
             mock.patch("scripts.repomap_core.USING_TSL_PACK", using_tsl_pack),
@@ -578,10 +778,10 @@ class RepoMapTagExtractionTests(unittest.TestCase):
         self.assertEqual(
             [(tag.name, tag.kind, tag.line, tag.end_line) for tag in tags],
             [
-                ("alpha", "def", 0, 1),
-                ("beta", "def", 3, 4),
-                ("gamma", "ref", 6, 6),
-                ("delta", "ref", 8, 8),
+                ("alpha", "def.function", 0, 1),
+                ("beta", "def.function", 3, 4),
+                ("gamma", "ref.call", 6, 6),
+                ("delta", "ref.call", 8, 8),
             ],
         )
 
@@ -591,10 +791,10 @@ class RepoMapTagExtractionTests(unittest.TestCase):
         self.assertEqual(
             [(tag.name, tag.kind, tag.line, tag.end_line) for tag in tags],
             [
-                ("alpha", "def", 0, 1),
-                ("beta", "def", 3, 4),
-                ("gamma", "ref", 6, 6),
-                ("delta", "ref", 8, 8),
+                ("alpha", "def.function", 0, 1),
+                ("beta", "def.function", 3, 4),
+                ("gamma", "ref.call", 6, 6),
+                ("delta", "ref.call", 8, 8),
             ],
         )
 
@@ -613,10 +813,10 @@ class RepoMapTagExtractionTests(unittest.TestCase):
         tags = list(self.repo_map.get_tags_raw(markdown_path, "README.md"))
         names_and_kinds = [(tag.name, tag.kind) for tag in tags]
 
-        self.assertIn(("Title", "def"), names_and_kinds)
-        self.assertIn(("Subtitle", "def"), names_and_kinds)
-        self.assertIn(("[ref]", "ref"), names_and_kinds)
-        self.assertIn(("python", "ref"), names_and_kinds)
+        self.assertIn(("Title", "def.module"), names_and_kinds)
+        self.assertIn(("Subtitle", "def.module"), names_and_kinds)
+        self.assertIn(("[ref]", "ref.call"), names_and_kinds)
+        self.assertIn(("python", "ref.call"), names_and_kinds)
 
     def test_format_span_summary_merges_and_formats_ranges(self):
         summary = self.repo_map.format_span_summary([(0, 1), (3, 4), (4, 6), (-1, -1)])
@@ -691,14 +891,14 @@ class RepoMapTagExtractionTests(unittest.TestCase):
             mock.patch.object(self.repo_map, "get_tags", side_effect=fake_get_tags),
             mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
         ):
-            ranked_tags = self.repo_map.get_ranked_tags(
+            result = self.repo_map.get_ranked_tags(
                 chat_fnames=set(),
                 other_fnames=[b_path, a_path],
                 mentioned_fnames=set(),
                 mentioned_idents=set(),
             )
 
-        self.assertEqual([tag[0] for tag in ranked_tags], ["a.py", "b.py"])
+        self.assertEqual([tag[0] for tag in result.ranked_tags], ["a.py", "b.py"])
 
     def test_file_rank_scores_follow_display_order_for_ranked_tags(self):
         class FakeMultiDiGraph:
@@ -746,9 +946,14 @@ class RepoMapTagExtractionTests(unittest.TestCase):
                 mentioned_idents=set(),
             )
 
-        self.assertGreater(self.repo_map.file_rank_scores["a.py"], self.repo_map.file_rank_scores["b.py"])
+        self.assertGreater(
+            self.repo_map.file_rank_scores["a.py"],
+            self.repo_map.file_rank_scores["b.py"],
+        )
 
-    def test_get_ranked_tags_boosts_markdown_heading_token_matches_for_mentioned_idents(self):
+    def test_get_ranked_tags_boosts_markdown_heading_token_matches_for_mentioned_idents(
+        self,
+    ):
         class FakeMultiDiGraph:
             def __init__(self):
                 self.nodes = set()
@@ -793,14 +998,351 @@ class RepoMapTagExtractionTests(unittest.TestCase):
             mock.patch.object(self.repo_map, "get_tags", side_effect=fake_get_tags),
             mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
         ):
-            ranked_tags = self.repo_map.get_ranked_tags(
+            result = self.repo_map.get_ranked_tags(
                 chat_fnames=set(),
                 other_fnames=[a_path, z_path],
                 mentioned_fnames=set(),
                 mentioned_idents={"Agent"},
             )
 
-        self.assertEqual([tag[0] for tag in ranked_tags[:2]], ["z.md", "a.md"])
+        self.assertEqual([tag[0] for tag in result.ranked_tags[:2]], ["z.md", "a.md"])
+
+    def test_annotate_symbol_kinds_inserts_labels(self):
+        rendered = "1│def foo():\n2│    pass\n3│class Bar:\n4│    pass\n"
+        line_kinds = {0: {"function"}, 2: {"class"}}
+        result = self.repo_map._annotate_symbol_kinds(rendered, line_kinds)
+
+        lines = result.splitlines()
+        self.assertIn("[fn]", lines[0])
+        self.assertNotIn("[", lines[1])
+        self.assertIn("[class]", lines[2])
+
+    def test_annotate_symbol_kinds_skips_empty_kinds(self):
+        rendered = "1│x = 1"
+        line_kinds = {0: {""}}
+        result = self.repo_map._annotate_symbol_kinds(rendered, line_kinds)
+
+        self.assertEqual(result, rendered)
+
+    def test_show_symbol_kinds_disabled_produces_no_annotations(self):
+        self.repo_map.show_symbol_kinds = False
+        tags = [
+            Tag("sample.py", self.fname, 0, 1, "alpha", "def.function"),
+        ]
+        output = self.repo_map.to_tree(tags, set())
+
+        self.assertNotIn("[fn]", output)
+
+    def test_show_symbol_kinds_enabled_produces_annotations(self):
+        self.repo_map.show_symbol_kinds = True
+        tags = [
+            Tag("sample.py", self.fname, 0, 1, "alpha", "def.function"),
+        ]
+        output = self.repo_map.to_tree(tags, set())
+
+        self.assertIn("[fn]", output)
+
+    def test_show_symbol_kinds_multiple_kinds_on_same_line(self):
+        self.repo_map.show_symbol_kinds = True
+        tags = [
+            Tag("sample.py", self.fname, 0, 1, "alpha", "def.function"),
+            Tag("sample.py", self.fname, 0, 0, "alpha", "def.class"),
+        ]
+        output = self.repo_map.to_tree(tags, set())
+
+        self.assertIn("[class,fn]", output)
+
+    def test_parse_args_supports_symbol_kinds(self):
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "generate_repomap.py",
+                "--repo-path",
+                "/tmp/example-repo",
+                "--symbol-kinds",
+            ],
+        ):
+            args = parse_args()
+
+        self.assertTrue(args.symbol_kinds)
+
+    def test_get_ranked_tags_returns_rank_result(self):
+        class FakeMultiDiGraph:
+            def __init__(self):
+                self.nodes = set()
+                self._out_edges = defaultdict(list)
+
+            def add_edge(self, src, dst, **data):
+                self.nodes.add(src)
+                self.nodes.add(dst)
+                self._out_edges[src].append((src, dst, data))
+
+            def out_edges(self, src, data=True):
+                return list(self._out_edges.get(src, []))
+
+        fake_networkx = SimpleNamespace(
+            MultiDiGraph=FakeMultiDiGraph,
+            pagerank=lambda graph, weight="weight", **kwargs: {
+                node: 1.0 for node in sorted(graph.nodes)
+            },
+        )
+
+        a_path = os.path.join(self.tempdir.name, "a.py")
+        b_path = os.path.join(self.tempdir.name, "b.py")
+        for path in (a_path, b_path):
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("pass\n")
+
+        def fake_get_tags(fname, rel_fname):
+            if rel_fname == "a.py":
+                return [Tag("a.py", a_path, 0, 0, "alpha", "def.function")]
+            if rel_fname == "b.py":
+                return [Tag("b.py", b_path, 0, 0, "alpha", "ref.call")]
+            return []
+
+        with (
+            mock.patch.object(self.repo_map, "get_tags", side_effect=fake_get_tags),
+            mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
+        ):
+            result = self.repo_map.get_ranked_tags(
+                chat_fnames=set(),
+                other_fnames=[a_path, b_path],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+        self.assertIsInstance(result, RankResult)
+        self.assertIn("a.py", [t[0] for t in result.ranked_tags])
+        self.assertIn("alpha", result.defines)
+        self.assertIn("alpha", result.references)
+        self.assertIsInstance(result.related_files, dict)
+
+    def test_get_ranked_tags_returns_rank_result_when_pagerank_divides_by_zero(self):
+        class FakeMultiDiGraph:
+            def __init__(self):
+                self.nodes = set()
+                self._out_edges = defaultdict(list)
+
+            def add_edge(self, src, dst, **data):
+                self.nodes.add(src)
+                self.nodes.add(dst)
+                self._out_edges[src].append((src, dst, data))
+
+            def out_edges(self, src, data=True):
+                return list(self._out_edges.get(src, []))
+
+        def raise_zero_division(*args, **kwargs):
+            raise ZeroDivisionError()
+
+        fake_networkx = SimpleNamespace(
+            MultiDiGraph=FakeMultiDiGraph,
+            pagerank=raise_zero_division,
+        )
+
+        a_path = os.path.join(self.tempdir.name, "a.py")
+        with open(a_path, "w", encoding="utf-8") as handle:
+            handle.write("pass\n")
+
+        with (
+            mock.patch.object(
+                self.repo_map,
+                "get_tags",
+                return_value=[Tag("a.py", a_path, 0, 0, "alpha", "def.function")],
+            ),
+            mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
+        ):
+            result = self.repo_map.get_ranked_tags(
+                chat_fnames=set(),
+                other_fnames=[a_path],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+        self.assertIsInstance(result, RankResult)
+        self.assertEqual(result.ranked_tags, [("a.py",)])
+
+    def test_compute_related_files_links_definers_and_referencers(self):
+        defines = defaultdict(set, {"Foo": {"a.py"}, "Bar": {"b.py"}})
+        references = defaultdict(list, {"Foo": ["b.py", "c.py"], "Bar": ["a.py"]})
+        result = RepoMap._compute_related_files(
+            defines, references, chat_rel_fnames=set()
+        )
+
+        self.assertIn("a.py", result["b.py"]["related"])
+        self.assertIn("b.py", result["a.py"]["related"])
+        self.assertEqual(result["a.py"]["used_by"]["b.py"], 1)
+
+    def test_extract_imports_parses_python_imports(self):
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".py", delete=False) as tmp:
+            tmp.write(
+                "import os\nfrom collections import defaultdict\nimport numpy as np\n"
+            )
+            tmp.flush()
+            imports = self.repo_map._extract_imports(tmp.name, "test.py")
+
+        self.assertIn("os", imports)
+        self.assertIn("collections", imports)
+        self.assertIn("numpy", imports)
+        os.unlink(tmp.name)
+
+    def test_get_ranked_tags_skips_import_extraction_when_show_deps_disabled(self):
+        class FakeMultiDiGraph:
+            def __init__(self):
+                self.nodes = set()
+                self._out_edges = defaultdict(list)
+
+            def add_edge(self, src, dst, **data):
+                self.nodes.add(src)
+                self.nodes.add(dst)
+                self._out_edges[src].append((src, dst, data))
+
+            def out_edges(self, src, data=True):
+                return list(self._out_edges.get(src, []))
+
+        fake_networkx = SimpleNamespace(
+            MultiDiGraph=FakeMultiDiGraph,
+            pagerank=lambda graph, weight="weight", **kwargs: {
+                node: 1.0 for node in sorted(graph.nodes)
+            },
+        )
+
+        self.repo_map.show_deps = False
+        a_path = os.path.join(self.tempdir.name, "a.py")
+        with open(a_path, "w", encoding="utf-8") as handle:
+            handle.write("pass\n")
+
+        with (
+            mock.patch.object(
+                self.repo_map,
+                "get_tags",
+                return_value=[Tag("a.py", a_path, 0, 0, "alpha", "def.function")],
+            ),
+            mock.patch.object(
+                self.repo_map,
+                "_extract_imports",
+                side_effect=AssertionError("should not be called"),
+            ),
+            mock.patch.dict(sys.modules, {"networkx": fake_networkx}),
+        ):
+            self.repo_map.get_ranked_tags(
+                chat_fnames=set(),
+                other_fnames=[a_path],
+                mentioned_fnames=set(),
+                mentioned_idents=set(),
+            )
+
+    def test_format_deps_meta_produces_expected_lines(self):
+        related_files = {
+            "a.py": {
+                "related": ["b.py", "c.py"],
+                "used_by": {"b.py": 5},
+            }
+        }
+        import_deps = {"a.py": ["os", "sys"]}
+
+        meta = RepoMap._format_deps_meta("a.py", related_files, import_deps)
+        self.assertIn("deps: os, sys", meta)
+        self.assertIn("related: b.py, c.py", meta)
+        self.assertIn("used by: b.py (5 refs)", meta)
+
+    def test_format_deps_meta_returns_empty_for_unknown_file(self):
+        meta = RepoMap._format_deps_meta("z.py", {}, {})
+        self.assertEqual(meta, "")
+
+    def test_show_deps_injects_metadata_in_output(self):
+        self.repo_map.show_deps = True
+        tags = [
+            Tag("sample.py", self.fname, 0, 1, "alpha", "def.function"),
+        ]
+        related_files = {
+            "sample.py": {
+                "related": ["other.py"],
+                "used_by": {"other.py": 3},
+            }
+        }
+        import_deps = {"sample.py": ["os"]}
+        rank_result = RankResult(
+            ranked_tags=tags,
+            defines={},
+            references={},
+            definitions={},
+            graph=None,
+            related_files=related_files,
+            import_deps=import_deps,
+        )
+        output = self.repo_map.to_tree(tags, set(), rank_result)
+
+        self.assertIn("deps: os", output)
+        self.assertIn("related: other.py", output)
+        self.assertIn("used by: other.py (3 refs)", output)
+
+    def test_show_deps_disabled_omits_metadata(self):
+        self.repo_map.show_deps = False
+        tags = [
+            Tag("sample.py", self.fname, 0, 1, "alpha", "def.function"),
+        ]
+        rank_result = RankResult(
+            ranked_tags=tags,
+            defines={},
+            references={},
+            definitions={},
+            graph=None,
+            related_files={"sample.py": {"related": ["other.py"], "used_by": {}}},
+            import_deps={"sample.py": ["os"]},
+        )
+        output = self.repo_map.to_tree(tags, set(), rank_result)
+
+        self.assertNotIn("deps:", output)
+        self.assertNotIn("related:", output)
+
+    def test_show_deps_renders_metadata_for_tagless_file_sections(self):
+        self.repo_map.show_deps = True
+        tags = [
+            ("sample.py",),
+        ]
+        rank_result = RankResult(
+            ranked_tags=tags,
+            defines={},
+            references={},
+            definitions={},
+            graph=None,
+            related_files={"sample.py": {"related": ["other.py"], "used_by": {}}},
+            import_deps={"sample.py": ["os"]},
+        )
+
+        output = self.repo_map.to_tree(tags, set(), rank_result)
+
+        self.assertIn("sample.py", output)
+        self.assertIn("deps: os", output)
+        self.assertIn("related: other.py", output)
+
+    def test_parse_map_section_skips_deps_metadata_lines(self):
+        section = (
+            "a.py [lines 1-2]:\n"
+            "  deps: os, sys\n"
+            "  related: b.py\n"
+            "  used by: b.py (5 refs)\n"
+            "1│def alpha():\n"
+        )
+        result = parse_map_section(section, 1)
+
+        self.assertEqual(result["key_symbol"], "def alpha():")
+
+    def test_parse_args_supports_show_deps(self):
+        with mock.patch.object(
+            sys,
+            "argv",
+            [
+                "generate_repomap.py",
+                "--repo-path",
+                "/tmp/example-repo",
+                "--show-deps",
+            ],
+        ):
+            args = parse_args()
+
+        self.assertTrue(args.show_deps)
 
 
 if __name__ == "__main__":

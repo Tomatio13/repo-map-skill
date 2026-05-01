@@ -36,12 +36,41 @@ from grep_ast.tsl import USING_TSL_PACK, get_language, get_parser  # noqa: E402
 import tiktoken
 
 Tag = namedtuple("Tag", "rel_fname fname line end_line name kind".split())
+RankResult = namedtuple(
+    "RankResult",
+    "ranked_tags defines references definitions graph related_files import_deps",
+)
+
+
+def _tag_category(kind):
+    return kind.split(".")[0]
+
+
+def _tag_subcategory(kind):
+    parts = kind.split(".", 1)
+    return parts[1] if len(parts) > 1 else ""
+
+
+KIND_LABELS = {
+    "class": "class",
+    "interface": "iface",
+    "type": "type",
+    "enum": "enum",
+    "function": "fn",
+    "method": "method",
+    "constant": "const",
+    "variable": "var",
+    "module": "module",
+    "macro": "macro",
+    "property": "prop",
+    "constructor": "ctor",
+}
 
 SQLITE_ERRORS = (sqlite3.OperationalError, sqlite3.DatabaseError, OSError)
 
-CACHE_VERSION = 6
+CACHE_VERSION = 7
 if USING_TSL_PACK:
-    CACHE_VERSION = 6
+    CACHE_VERSION = 7
 
 UPDATING_REPO_MAP_MESSAGE = "Updating repo map"
 
@@ -156,11 +185,15 @@ class RepoMap:
         max_context_window=None,
         map_mul_no_files=8,
         refresh="auto",
+        show_symbol_kinds=False,
+        show_deps=False,
     ):
         self.io = SimpleIO(verbose=verbose)
         self.verbose = verbose
         self.refresh = refresh
         self.show_ranks = show_ranks
+        self.show_symbol_kinds = show_symbol_kinds
+        self.show_deps = show_deps
 
         if not root:
             root = os.getcwd()
@@ -230,7 +263,7 @@ class RepoMap:
             max_map_tokens = target
 
         try:
-            files_listing = self.get_ranked_tags_map(
+            result = self.get_ranked_tags_map(
                 chat_files,
                 other_files,
                 max_map_tokens,
@@ -242,6 +275,12 @@ class RepoMap:
             self.io.tool_error("Disabling repo map, git repo too large?")
             self.max_map_tokens = 0
             return
+
+        if not result:
+            return
+
+        self._last_rank_result = result.get("rank_result")
+        files_listing = result["map"]
 
         if not files_listing:
             return
@@ -393,16 +432,20 @@ class RepoMap:
                 matches.append((node, tag))
 
         if USING_TSL_PACK:
-            all_nodes = [(node, tag) for tag, nodes in captures_by_tag.items() for node in nodes]
+            all_nodes = [
+                (node, tag) for tag, nodes in captures_by_tag.items() for node in nodes
+            ]
         else:
             all_nodes = matches
 
         saw = set()
         for node, tag in all_nodes:
             if tag.startswith("name.definition."):
-                kind = "def"
+                subcat = tag[len("name.definition.") :]
+                kind = f"def.{subcat}" if subcat else "def"
             elif tag.startswith("name.reference."):
-                kind = "ref"
+                subcat = tag[len("name.reference.") :]
+                kind = f"ref.{subcat}" if subcat else "ref"
             else:
                 continue
 
@@ -479,7 +522,9 @@ class RepoMap:
 
     @staticmethod
     def sort_tags_for_output(tags):
-        return sorted(tags, key=lambda tag: (tag.line, tag.end_line, tag.name, tag.kind))
+        return sorted(
+            tags, key=lambda tag: (tag.line, tag.end_line, tag.name, tag.kind)
+        )
 
     def format_file_header(self, rel_fname, spans):
         parts = [rel_fname]
@@ -493,13 +538,19 @@ class RepoMap:
         return " ".join(parts)
 
     def get_ranked_tags(
-        self, chat_fnames, other_fnames, mentioned_fnames, mentioned_idents, progress=None
+        self,
+        chat_fnames,
+        other_fnames,
+        mentioned_fnames,
+        mentioned_idents,
+        progress=None,
     ):
         import networkx as nx
 
         defines = defaultdict(set)
         references = defaultdict(list)
         definitions = defaultdict(set)
+        import_deps = {}
 
         personalization = dict()
 
@@ -562,7 +613,9 @@ class RepoMap:
             path_components = set(path_obj.parts)
             basename_with_ext = path_obj.name
             basename_without_ext, _ = os.path.splitext(basename_with_ext)
-            components_to_check = path_components.union({basename_with_ext, basename_without_ext})
+            components_to_check = path_components.union(
+                {basename_with_ext, basename_without_ext}
+            )
 
             matched_idents = components_to_check.intersection(mentioned_idents)
             if matched_idents:
@@ -573,21 +626,29 @@ class RepoMap:
             if tags is None:
                 continue
 
+            if self.show_deps:
+                file_imports = self._extract_imports(fname, rel_fname)
+                if file_imports:
+                    import_deps[rel_fname] = file_imports
+
             if mentioned_idents and any(
-                ident_matches_mentioned_idents(tag.name, mentioned_idents) for tag in tags
+                ident_matches_mentioned_idents(tag.name, mentioned_idents)
+                for tag in tags
             ):
                 current_pers += personalize
 
             if current_pers > 0:
-                personalization[rel_fname] = current_pers  # Assign the final calculated value
+                personalization[rel_fname] = (
+                    current_pers  # Assign the final calculated value
+                )
 
             for tag in tags:
-                if tag.kind == "def":
+                if _tag_category(tag.kind) == "def":
                     defines[tag.name].add(rel_fname)
                     key = (rel_fname, tag.name)
                     definitions[key].add(tag)
 
-                elif tag.kind == "ref":
+                elif _tag_category(tag.kind) == "ref":
                     references[tag.name].append(rel_fname)
 
         if not references:
@@ -614,8 +675,12 @@ class RepoMap:
 
             is_snake = ("_" in ident) and any(c.isalpha() for c in ident)
             is_kebab = ("-" in ident) and any(c.isalpha() for c in ident)
-            is_camel = any(c.isupper() for c in ident) and any(c.islower() for c in ident)
-            if ident in mentioned_idents or ident_matches_mentioned_idents(ident, mentioned_idents):
+            is_camel = any(c.isupper() for c in ident) and any(
+                c.islower() for c in ident
+            )
+            if ident in mentioned_idents or ident_matches_mentioned_idents(
+                ident, mentioned_idents
+            ):
                 mul *= 10
             if (is_snake or is_kebab or is_camel) and len(ident) >= 8:
                 mul *= 10
@@ -633,7 +698,9 @@ class RepoMap:
                     # scale down so high freq (low value) mentions don't dominate
                     num_refs = math.sqrt(num_refs)
 
-                    G.add_edge(referencer, definer, weight=use_mul * num_refs, ident=ident)
+                    G.add_edge(
+                        referencer, definer, weight=use_mul * num_refs, ident=ident
+                    )
 
         if not references:
             pass
@@ -649,16 +716,20 @@ class RepoMap:
             try:
                 ranked = nx.pagerank(G, weight="weight")
             except ZeroDivisionError:
-                return []
+                ranked = {}
 
         # distribute the rank from each source node, across all of its out edges
         ranked_definitions = defaultdict(float)
         for src in sorted(G.nodes):
+            if src not in ranked:
+                continue
             if progress:
                 progress(f"{UPDATING_REPO_MAP_MESSAGE}: {src}")
 
             src_rank = ranked[src]
-            total_weight = sum(data["weight"] for _src, _dst, data in G.out_edges(src, data=True))
+            total_weight = sum(
+                data["weight"] for _src, _dst, data in G.out_edges(src, data=True)
+            )
             for _src, dst, data in G.out_edges(src, data=True):
                 data["rank"] = src_rank * data["weight"] / total_weight
                 ident = data["ident"]
@@ -677,9 +748,13 @@ class RepoMap:
         for (fname, ident), rank in ranked_definitions:
             if fname in chat_rel_fnames:
                 continue
-            ranked_tags += self.sort_tags_for_output(definitions.get((fname, ident), []))
+            ranked_tags += self.sort_tags_for_output(
+                definitions.get((fname, ident), [])
+            )
 
-        rel_other_fnames_without_tags = set(self.get_rel_fname(fname) for fname in other_fnames)
+        rel_other_fnames_without_tags = set(
+            self.get_rel_fname(fname) for fname in other_fnames
+        )
 
         fnames_already_included = set(rt[0] for rt in ranked_tags)
 
@@ -696,7 +771,19 @@ class RepoMap:
         for fname in sorted(rel_other_fnames_without_tags):
             ranked_tags.append((fname,))
 
-        return ranked_tags
+        related_files = self._compute_related_files(
+            defines, references, chat_rel_fnames
+        )
+
+        return RankResult(
+            ranked_tags=ranked_tags,
+            defines=defines,
+            references=references,
+            definitions=definitions,
+            graph=G,
+            related_files=related_files,
+            import_deps=import_deps,
+        )
 
     def get_ranked_tags_map(
         self,
@@ -740,7 +827,11 @@ class RepoMap:
         # If not in cache or force_refresh is True, generate the map
         start_time = time.time()
         result = self.get_ranked_tags_map_uncached(
-            chat_fnames, other_fnames, max_map_tokens, mentioned_fnames, mentioned_idents
+            chat_fnames,
+            other_fnames,
+            max_map_tokens,
+            mentioned_fnames,
+            mentioned_idents,
         )
         end_time = time.time()
         self.map_processing_time = end_time - start_time
@@ -770,7 +861,7 @@ class RepoMap:
 
         spin = Spinner(UPDATING_REPO_MAP_MESSAGE)
 
-        ranked_tags = self.get_ranked_tags(
+        rank_result = self.get_ranked_tags(
             chat_fnames,
             other_fnames,
             mentioned_fnames,
@@ -778,7 +869,11 @@ class RepoMap:
             progress=spin.step,
         )
 
-        other_rel_fnames = sorted(set(self.get_rel_fname(fname) for fname in other_fnames))
+        ranked_tags = rank_result.ranked_tags
+
+        other_rel_fnames = sorted(
+            set(self.get_rel_fname(fname) for fname in other_fnames)
+        )
         special_fnames = filter_important_files(other_rel_fnames)
         ranked_tags_fnames = set(tag[0] for tag in ranked_tags)
         special_fnames = [fn for fn in special_fnames if fn not in ranked_tags_fnames]
@@ -806,12 +901,14 @@ class RepoMap:
                 show_tokens = str(middle)
             spin.step(f"{UPDATING_REPO_MAP_MESSAGE}: {show_tokens} tokens")
 
-            tree = self.to_tree(ranked_tags[:middle], chat_rel_fnames)
+            tree = self.to_tree(ranked_tags[:middle], chat_rel_fnames, rank_result)
             num_tokens = self.token_count(tree)
 
             pct_err = abs(num_tokens - max_map_tokens) / max_map_tokens
             ok_err = 0.15
-            if (num_tokens <= max_map_tokens and num_tokens > best_tree_tokens) or pct_err < ok_err:
+            if (
+                num_tokens <= max_map_tokens and num_tokens > best_tree_tokens
+            ) or pct_err < ok_err:
                 best_tree = tree
                 best_tree_tokens = num_tokens
 
@@ -826,7 +923,7 @@ class RepoMap:
             middle = int((lower_bound + upper_bound) // 2)
 
         spin.end()
-        return best_tree
+        return {"map": best_tree, "rank_result": rank_result}
 
     tree_cache = dict()
 
@@ -872,11 +969,17 @@ class RepoMap:
                     context = None
                 else:
                     raise
-            self.tree_context_cache[rel_fname] = {"context": context, "mtime": mtime, "code": code}
+            self.tree_context_cache[rel_fname] = {
+                "context": context,
+                "mtime": mtime,
+                "code": code,
+            }
 
         context = self.tree_context_cache[rel_fname]["context"]
         if context is None:
-            res = self.render_plain_context(self.tree_context_cache[rel_fname]["code"], lois)
+            res = self.render_plain_context(
+                self.tree_context_cache[rel_fname]["code"], lois
+            )
         else:
             context.lines_of_interest = set()
             context.add_lines_of_interest(lois)
@@ -885,7 +988,58 @@ class RepoMap:
         self.tree_cache[key] = res
         return res
 
-    def to_tree(self, tags, chat_rel_fnames):
+    _IMPORT_RE = re.compile(
+        r"^\s*"
+        r"(?:"
+        r"import\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)"
+        r"|from\s+([a-zA-Z_]\w*(?:\.[a-zA-Z_]\w*)*)\s+import"
+        r"|require\s*\(\s*['\"]([^'\"]+)['\"]"
+        r"|include\s+[<\"]([^>\"/]+)"
+        r"|use\s+([a-zA-Z_][\w:]*)"
+        r")"
+    )
+
+    def _extract_imports(self, fname, rel_fname):
+        code = self.io.read_text(fname)
+        if not code:
+            return []
+        modules = set()
+        for line in code.splitlines():
+            m = self._IMPORT_RE.match(line)
+            if m:
+                for group in m.groups():
+                    if group:
+                        root_mod = group.split(".")[0].split(":")[0].split("/")[0]
+                        modules.add(root_mod)
+        return sorted(modules)
+
+    @staticmethod
+    def _compute_related_files(defines, references, chat_rel_fnames):
+        related = defaultdict(set)
+        used_by = defaultdict(list)
+
+        for ident, definers in defines.items():
+            referencers = references.get(ident, [])
+            for definer in definers:
+                for ref in referencers:
+                    if ref != definer:
+                        related[definer].add(ref)
+                        related[ref].add(definer)
+                        used_by[definer].append(ref)
+
+        result = {}
+        for fname in set(related.keys()) | set(used_by.keys()):
+            result[fname] = {
+                "related": sorted(related.get(fname, set())),
+                "used_by": {},
+            }
+            ref_counts = Counter(used_by.get(fname, []))
+            for ref, count in sorted(ref_counts.items()):
+                result[fname]["used_by"][ref] = count
+
+        return result
+
+    def to_tree(self, tags, chat_rel_fnames, rank_result=None):
         if not tags:
             return ""
 
@@ -893,7 +1047,14 @@ class RepoMap:
         cur_abs_fname = None
         lois = None
         spans = None
+        line_kinds = {}
         output = ""
+
+        related_files = {}
+        import_deps = {}
+        if self.show_deps and rank_result is not None:
+            related_files = rank_result.related_files
+            import_deps = rank_result.import_deps
 
         # add a bogus tag at the end so we trip the this_fname != cur_fname...
         dummy_tag = (None,)
@@ -905,27 +1066,87 @@ class RepoMap:
             # ... here ... to output the final real entry in the list
             if this_rel_fname != cur_fname:
                 if lois is not None:
+                    rendered = self.render_tree(cur_abs_fname, cur_fname, lois)
+                    if self.show_symbol_kinds:
+                        rendered = self._annotate_symbol_kinds(rendered, line_kinds)
                     output += "\n"
                     output += self.format_file_header(cur_fname, spans or []) + ":\n"
-                    output += self.render_tree(cur_abs_fname, cur_fname, lois)
+                    if self.show_deps:
+                        output += self._render_deps_meta(
+                            cur_fname, related_files, import_deps
+                        )
+                    output += rendered
                     lois = None
                     spans = None
+                    line_kinds = {}
                 elif cur_fname:
                     output += "\n" + self.format_file_header(cur_fname, []) + "\n"
+                    if self.show_deps:
+                        output += self._render_deps_meta(
+                            cur_fname, related_files, import_deps
+                        )
                 if type(tag) is Tag:
                     lois = []
                     spans = []
                     cur_abs_fname = tag.fname
+                    line_kinds = {}
                 cur_fname = this_rel_fname
 
             if lois is not None:
                 lois.append(tag.line)
                 spans.append((tag.line, tag.end_line))
+                if self.show_symbol_kinds:
+                    subcat = _tag_subcategory(tag.kind)
+                    line_kinds.setdefault(tag.line, set()).add(subcat)
 
         # truncate long lines, in case we get minified js or something else crazy
         output = "\n".join([line[:100] for line in output.splitlines()]) + "\n"
 
         return output
+
+    @staticmethod
+    def _format_deps_meta(fname, related_files, import_deps):
+        parts = []
+        deps = import_deps.get(fname)
+        if deps:
+            parts.append("  deps: " + ", ".join(sorted(deps)))
+        info = related_files.get(fname)
+        if info:
+            related = info.get("related", [])
+            if related:
+                parts.append("  related: " + ", ".join(related))
+            used_by = info.get("used_by", {})
+            if used_by:
+                entries = [f"{f} ({c} refs)" for f, c in used_by.items()]
+                parts.append("  used by: " + ", ".join(entries))
+        return "\n".join(parts)
+
+    @classmethod
+    def _render_deps_meta(cls, fname, related_files, import_deps):
+        meta = cls._format_deps_meta(fname, related_files, import_deps)
+        if not meta:
+            return ""
+        return meta + "\n"
+
+    @staticmethod
+    def _annotate_symbol_kinds(rendered, line_kinds):
+        if not line_kinds:
+            return rendered
+        lines = rendered.splitlines()
+        result = []
+        for line in lines:
+            m = re.match(r"^(\s*)(\d+)│(.*)", line)
+            if m:
+                prefix, line_no_str, rest = m.groups()
+                line_no = int(line_no_str) - 1
+                kinds = line_kinds.get(line_no)
+                if kinds:
+                    labels = sorted(KIND_LABELS.get(k, k) for k in kinds if k)
+                    if labels:
+                        annotation = " [" + ",".join(labels) + "]"
+                        line = f"{prefix}{line_no_str}│{rest}{annotation}"
+            result.append(line)
+        return "\n".join(result)
 
 
 def find_src_files(directory):

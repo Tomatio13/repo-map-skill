@@ -21,20 +21,81 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 SKIP_DIRS = {
-    ".git", ".svn", ".hg", "node_modules", "__pycache__", ".tox",
-    ".mypy_cache", ".pytest_cache", ".ruff_cache", "venv", ".venv",
-    "env", ".env", "dist", "build", "egg-info", ".eggs", ".next",
-    ".nuxt", "target", "vendor", "Pods", ".gradle", ".idea", ".vscode",
+    ".git",
+    ".svn",
+    ".hg",
+    "node_modules",
+    "__pycache__",
+    ".tox",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".ruff_cache",
+    "venv",
+    ".venv",
+    "env",
+    ".env",
+    "dist",
+    "build",
+    "egg-info",
+    ".eggs",
+    ".next",
+    ".nuxt",
+    "target",
+    "vendor",
+    "Pods",
+    ".gradle",
+    ".idea",
+    ".vscode",
 }
 
 SKIP_EXTENSIONS = {
-    ".pyc", ".pyo", ".so", ".dylib", ".dll", ".exe", ".o", ".a",
-    ".class", ".jar", ".war", ".zip", ".tar", ".gz", ".bz2", ".xz",
-    ".7z", ".rar", ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico",
-    ".svg", ".webp", ".mp3", ".mp4", ".avi", ".mov", ".wmv", ".flac",
-    ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
-    ".woff", ".woff2", ".ttf", ".eot", ".otf",
-    ".db", ".sqlite", ".sqlite3",
+    ".pyc",
+    ".pyo",
+    ".so",
+    ".dylib",
+    ".dll",
+    ".exe",
+    ".o",
+    ".a",
+    ".class",
+    ".jar",
+    ".war",
+    ".zip",
+    ".tar",
+    ".gz",
+    ".bz2",
+    ".xz",
+    ".7z",
+    ".rar",
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".bmp",
+    ".ico",
+    ".svg",
+    ".webp",
+    ".mp3",
+    ".mp4",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".flac",
+    ".pdf",
+    ".doc",
+    ".docx",
+    ".xls",
+    ".xlsx",
+    ".ppt",
+    ".pptx",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".otf",
+    ".db",
+    ".sqlite",
+    ".sqlite3",
 }
 
 STATE_DIRNAME = ".repomap"
@@ -59,7 +120,11 @@ def discover_files(repo_path, exclude_globs=None):
     files = []
     for root, dirs, filenames in os.walk(repo_path):
         # Skip unwanted directories in-place
-        dirs[:] = [d for d in dirs if d not in SKIP_DIRS and (not d.startswith(".") or d == ".github")]
+        dirs[:] = [
+            d
+            for d in dirs
+            if d not in SKIP_DIRS and (not d.startswith(".") or d == ".github")
+        ]
         for fn in filenames:
             ext = os.path.splitext(fn)[1].lower()
             if ext in SKIP_EXTENSIONS:
@@ -199,8 +264,22 @@ def print_json(payload):
 def split_map_sections(map_text):
     if not map_text:
         return []
+    header_re = re.compile(r"^[^\s].*:\s*$")
+    lines = map_text.splitlines()
+    sections = []
+    current = []
 
-    return [section.strip() for section in map_text.strip().split("\n\n") if section.strip()]
+    for line in lines:
+        if header_re.match(line) and current:
+            sections.append("\n".join(current).strip())
+            current = [line]
+        else:
+            current.append(line)
+
+    if current:
+        sections.append("\n".join(current).strip())
+
+    return [section for section in sections if section]
 
 
 def select_top_map_sections(map_text, top_files):
@@ -302,7 +381,9 @@ def parse_map_section(section, rank):
         file_name = header_parts[0]
         bracket_parts = ["[" + part for part in header_parts[1:]]
         line_candidates = [part for part in bracket_parts if part.startswith("[lines ")]
-        score_candidates = [part for part in bracket_parts if part.startswith("[score=")]
+        score_candidates = [
+            part for part in bracket_parts if part.startswith("[score=")
+        ]
         if line_candidates:
             line_summary = line_candidates[0]
         elif score_candidates:
@@ -313,6 +394,12 @@ def parse_map_section(section, rank):
     for body_line in lines[1:]:
         stripped = body_line.strip()
         if stripped in {"...⋮...", "..."}:
+            continue
+        if (
+            stripped.startswith("deps:")
+            or stripped.startswith("related:")
+            or stripped.startswith("used by:")
+        ):
             continue
         if "│" in body_line:
             candidate = body_line.split("│", 1)[1].strip()
@@ -381,7 +468,16 @@ def build_view_rows(map_text, top_files):
     return rows
 
 
-def evaluate_staleness(state, repo_path, current_files, map_tokens, chat_files, exclude_globs, mentioned_fnames, mentioned_idents):
+def evaluate_staleness(
+    state,
+    repo_path,
+    current_files,
+    map_tokens,
+    chat_files,
+    exclude_globs,
+    mentioned_fnames,
+    mentioned_idents,
+):
     if not state:
         return True, "missing_state"
 
@@ -457,7 +553,9 @@ def format_view_report(map_path, top_files, map_text):
     rows = build_view_rows(map_text, top_files)
     table = render_unicode_table(
         headers=["rank", "file", "lines", "key symbol"],
-        rows=[[row["rank"], row["file"], row["lines"], row["key_symbol"]] for row in rows],
+        rows=[
+            [row["rank"], row["file"], row["lines"], row["key_symbol"]] for row in rows
+        ],
         alignments=["right", "left", "left", "left"],
         max_widths=[4, 48, 20, 36],
     )
@@ -481,7 +579,16 @@ def build_view_payload(map_path, top_files, map_text):
     }
 
 
-def build_map_payload(command, repo_path, map_tokens, state_path, map_path, result, state_written, top_files):
+def build_map_payload(
+    command,
+    repo_path,
+    map_tokens,
+    state_path,
+    map_path,
+    result,
+    state_written,
+    top_files,
+):
     return {
         "command": command,
         "repo_path": repo_path,
@@ -586,6 +693,16 @@ Examples:
         help="Show per-file ranking scores in the repo map output.",
     )
     parser.add_argument(
+        "--symbol-kinds",
+        action="store_true",
+        help="Annotate symbols with their kind (class, fn, method, etc.) in the repo map output.",
+    )
+    parser.add_argument(
+        "--show-deps",
+        action="store_true",
+        help="Show import dependencies and related files for each file in the repo map output.",
+    )
+    parser.add_argument(
         "--write-state",
         action="store_true",
         help="Persist repo-map state after generation.",
@@ -638,7 +755,9 @@ def main():
     other_files -= chat_files
 
     mentioned_fnames = parse_mentioned_fnames(repo_path, args.mentioned_fnames)
-    mentioned_idents = set(i.strip() for i in args.mentioned_idents.split(",") if i.strip())
+    mentioned_idents = set(
+        i.strip() for i in args.mentioned_idents.split(",") if i.strip()
+    )
 
     if args.command == "status":
         state = load_state_file(state_path)
@@ -652,11 +771,17 @@ def main():
             mentioned_fnames,
             mentioned_idents,
         )
-        status_payload = build_status_payload(state_path, repo_path, state, stale, reason, other_files)
+        status_payload = build_status_payload(
+            state_path, repo_path, state, stale, reason, other_files
+        )
         if args.output_json:
             print_json(status_payload)
         else:
-            print(format_status_report(state_path, repo_path, state, stale, reason, other_files))
+            print(
+                format_status_report(
+                    state_path, repo_path, state, stale, reason, other_files
+                )
+            )
         sys.exit(1 if stale else 0)
 
     if args.command == "view":
@@ -676,6 +801,9 @@ def main():
         sys.exit(0)
 
     refresh = "always" if args.no_cache else "auto"
+    default_rich_map = args.command in {"init", "update"}
+    show_symbol_kinds = args.symbol_kinds or default_rich_map
+    show_deps = args.show_deps or default_rich_map
     from repomap_core import RepoMap
 
     rm = RepoMap(
@@ -684,6 +812,8 @@ def main():
         verbose=args.verbose,
         show_ranks=args.show_ranks,
         refresh=refresh,
+        show_symbol_kinds=show_symbol_kinds,
+        show_deps=show_deps,
     )
 
     result = rm.get_repo_map(
@@ -725,7 +855,10 @@ def main():
         else:
             print(result)
     else:
-        print("No repo map generated (no files matched or token budget too small).", file=sys.stderr)
+        print(
+            "No repo map generated (no files matched or token budget too small).",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
 
