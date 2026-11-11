@@ -863,4 +863,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if not os.environ.get("PYTHONIOENCODING"):
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     main()
